@@ -16,84 +16,83 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-# --- MAPA DEFINITIVO: Notion -> RD Station ---
-# A chave principal é o NOME EXATO DA COLUNA NO NOTION. O script só tentará preencher estas colunas.
+# --- MAPA FINAL: Notion -> RD Station (BASEADO NA SUA ÚLTIMA LISTA) ---
+# A chave é o NOME EXATO DA COLUNA NO NOTION. O script só preencherá o que estiver aqui.
 NOTION_COLUMNS_MAP = {
-    'CPF (COMPRADOR)':    {'id_rd': '67b0a46deba3040017bf2c62', 'type': 'text'},
-    'Renda':              {'id_rd': '67b31ea6e1f61f0016ce701d', 'type': 'number'},
-    'CLT/AUT':            {'id_rd': '67b3210c4ae59b00148582e9', 'type': 'select'},
-    '+3 ANOS DE CLT':     {'id_rd': '67b31f37ca237d001e358c1b', 'type': 'select'},
-    'Origem':             {'id_rd': '67b62f4fad0a4e0014841510', 'type': 'select'}, # Mapeando para "DE ONDE É"
-    'OBS: entrada? FGTS? FGTS\n Futuro? Limite Cartão?': {'id_rd': '67bdbe2a5062a6001945f18b', 'type': 'text'}, # Mapeando para "POR QUE DESEJA A CASA"
-    'Profissão':          {'id_rd': '67b0a3f6b436410018d97957', 'type': 'text'}, # Assumindo que tenha uma coluna 'Profissão'
-    'Estado Civil':       {'id_rd': '67b321ba30fafb001c8f8743', 'type': 'select'},
-    'Dependente':         {'id_rd': '67b31ed5943c0c001b25cd41', 'type': 'text'}, # Mapeando para "TEM DEPENDENTE"
-    # Adicione aqui outros mapeamentos conforme necessário
+    # Coluna no Notion      # Fonte no RD Station                     # Tipo no Notion
+    'CPF (COMPRADOR)':  {'source': 'custom', 'id_rd': '67b0a46deba3040017bf2c62', 'type': 'text'},
+    'Renda':            {'source': 'custom', 'id_rd': '67b31ea6e1f61f0016ce701d', 'type': 'number'},
+    'CLT / AUT':        {'source': 'custom', 'id_rd': '67b3210c4ae59b00148582e9', 'type': 'select'},
+    'Origem':           {'source': 'standard', 'path': ['deal', 'deal_source', 'name'], 'type': 'select'},
+    'Responsável':      {'source': 'standard', 'path': ['deal', 'user', 'name'], 'type': 'text_special'},
+    'Data de Origem':   {'source': 'standard', 'path': ['deal', 'created_at'], 'type': 'date'},
 }
-
 
 # --- FUNÇÕES ---
 
-def create_lead_in_notion(lead, normalized_phone, custom_fields_dict):
-    """Cria uma página no Notion apenas com as colunas que existem e estão mapeadas."""
-    print(f"A criar o lead '{lead['name']}' com dados mapeados no Notion...")
-    
+def get_value_from_path(data_dict, path):
+    """Navega num dicionário aninhado para buscar um valor."""
+    for key in path:
+        data_dict = data_dict.get(key)
+        if data_dict is None:
+            return None
+    return data_dict
+
+def create_lead_in_notion(lead_data, normalized_phone, custom_fields_dict):
+    print(f"A criar o lead '{lead_data['name']}' com mapeamento final no Notion...")
     url = "https://api.notion.com/v1/pages"
-    phone_for_notion = normalized_phone if normalized_phone else None
     
-    # Payload base apenas com as propriedades que temos certeza que existem
+    # Payload base com as propriedades que sempre tentaremos preencher
     properties_payload = {
-        "Nome (Completar)": {"title": [{"text": {"content": lead.get("name", "Negociação sem nome")}}]},
-        "Telefone": {"phone_number": phone_for_notion},
+        "Nome (Completar)": {"title": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]},
+        "Telefone": {"phone_number": normalized_phone if normalized_phone else None},
     }
 
-    # Itera sobre o nosso mapa para preencher dinamicamente apenas as colunas mapeadas
-    for notion_col_name, rd_mapping in NOTION_COLUMNS_MAP.items():
-        rd_field_id = rd_mapping['id_rd']
-        field_value = custom_fields_dict.get(rd_field_id)
-        
-        if field_value: # Só processa se o campo personalizado tiver algum valor no RD
-            notion_type = rd_mapping['type']
+    # Itera sobre o mapa para preencher dinamicamente as colunas
+    for notion_col_name, mapping in NOTION_COLUMNS_MAP.items():
+        field_value = None
+        source_type = mapping['source']
+
+        if source_type == 'custom':
+            field_value = custom_fields_dict.get(mapping['id_rd'])
+        elif source_type == 'standard':
+            field_value = get_value_from_path({'deal': lead_data}, mapping['path'])
+
+        if field_value:
+            notion_type = mapping['type']
             print(f"  - Mapeando campo: '{notion_col_name}' com valor '{field_value}'")
 
-            if notion_type == "text":
-                properties_payload[notion_col_name] = {"rich_text": [{"text": {"content": str(field_value)}}]}
-            elif notion_type == "select":
-                properties_payload[notion_col_name] = {"select": {"name": str(field_value)}}
-            elif notion_type == "number":
-                try:
-                    numeric_value = float(str(field_value).replace(",", "."))
+            try:
+                if notion_type == "text":
+                    properties_payload[notion_col_name] = {"rich_text": [{"text": {"content": str(field_value)}}]}
+                elif notion_type == "text_special": # Usado para campos como 'Responsável' que não são 'rich_text'
+                     properties_payload[notion_col_name] = {"people": [{"id": get_value_from_path({'deal': lead_data}, ['deal', 'user', 'id'])}]} if get_value_from_path({'deal': lead_data}, ['deal', 'user', 'id']) else {"rich_text": [{"text": {"content": str(field_value)}}]}
+                elif notion_type == "select":
+                    properties_payload[notion_col_name] = {"select": {"name": str(field_value)}}
+                elif notion_type == "number":
+                    cleaned_value = re.sub(r'[^\d,.]', '', str(field_value))
+                    numeric_value = float(cleaned_value.replace(",", "."))
                     properties_payload[notion_col_name] = {"number": numeric_value}
-                except (ValueError, TypeError):
-                    print(f"  !! Aviso: Não foi possível converter '{field_value}' para número na coluna '{notion_col_name}'.")
+                elif notion_type == "date":
+                    # Extrai apenas a parte da data (YYYY-MM-DD)
+                    date_only = str(field_value).split('T')[0]
+                    properties_payload[notion_col_name] = {"date": {"start": date_only}}
+            except Exception as e:
+                print(f"  !! Aviso: Falha ao formatar o valor '{field_value}' para a coluna '{notion_col_name}'. Erro: {e}")
 
-    # Monta o payload final e envia para o Notion
     final_payload = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties_payload}
     
     response = requests.post(url, headers=NOTION_HEADERS, json=final_payload)
     
     if response.status_code == 200:
-        print(f"Lead '{lead['name']}' CRIADO COM SUCESSO NO NOTION!")
+        print(f"Lead '{lead_data['name']}' CRIADO COM SUCESSO NO NOTION!")
     else:
         print(f"### ERRO AO CRIAR LEAD NO NOTION ###")
         print(f"Status Code: {response.status_code}")
         print(f"Resposta do Notion: {response.text}")
         print(f"####################################")
 
-# --- FUNÇÕES AUXILIARES (sem alterações) ---
-def send_whatsapp_notification(message):
-    if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
-        print("!! Aviso: Segredos do WhatsApp não configurados. Notificação não enviada.")
-        return
-    api_url = "https://api.botconversa.com.br/v1/webhooks/send"
-    headers = {"Authorization": f"Bearer {BOTCONVERSA_API_KEY}", "Content-Type": "application/json"}
-    payload = {"phone": WHATSAPP_RECIPIENT_NUMBER, "type": "text", "value": message}
-    try:
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"!! Erro ao enviar notificação para o WhatsApp: {e}")
-
+# --- FUNÇÕES AUXILIARES ---
 def normalize_phone_number(phone_str):
     if not phone_str: return ""
     return re.sub(r'\D', '', phone_str)
@@ -103,9 +102,7 @@ def find_lead_by_phone(normalized_phone):
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     payload = {"filter": {"property": "Telefone", "phone_number": {"equals": normalized_phone}}}
     response = requests.post(url, headers=NOTION_HEADERS, json=payload)
-    if response.status_code == 200 and len(response.json()["results"]) > 0:
-        return True
-    return False
+    return response.status_code == 200 and len(response.json()["results"]) > 0
 
 def fetch_rd_station_leads():
     url = f"https://crm.rdstation.com/api/v1/deals?token={RD_CRM_TOKEN}&deal_stage_id={RD_STAGE_ID}"
@@ -113,43 +110,34 @@ def fetch_rd_station_leads():
         response = requests.get(url)
         response.raise_for_status()
         return response.json().get("deals", [])
-    except requests.exceptions.RequestException as e:
-        print(f"Erro ao buscar negociações no RD Station: {e}")
+    except requests.exceptions.RequestException:
         return []
 
-# --- FLUXO PRINCIPAL (Atualizado) ---
+# --- FLUXO PRINCIPAL ---
 if __name__ == "__main__":
     print("--- A iniciar o script de sincronização ---")
     rd_leads = fetch_rd_station_leads()
     print(f"Encontradas {len(rd_leads)} negociações na etapa de avaliação.")
     
-    if rd_leads:
-        for lead in rd_leads:
-            lead_name = lead.get('name', 'Nome Desconhecido')
-            print(f"\nA processar negociação: {lead_name}")
-            
-            # Converte a lista de campos personalizados para um dicionário de fácil acesso (ID -> Valor)
-            custom_fields_list = lead.get("deal_custom_fields", [])
-            custom_fields_dict = {field.get("custom_field", {}).get("_id"): field.get("value") for field in custom_fields_list}
-            
-            # Lógica para encontrar o telefone
-            lead_phone = ""
-            contacts_list = lead.get("contacts", [])
-            if contacts_list:
-                lead_phone = (contacts_list[0].get("phones") or [{}])[0].get("phone")
-            
-            if not lead_phone:
-                id_ou_telefone_id = "67ea8afafddd15001447f639"
-                lead_phone = custom_fields_dict.get(id_ou_telefone_id)
+    for lead in rd_leads:
+        lead_name = lead.get('name', 'Nome Desconhecido')
+        print(f"\nA processar negociação: {lead_name}")
+        
+        custom_fields_dict = {field.get("custom_field", {}).get("_id"): field.get("value") for field in lead.get("deal_custom_fields", [])}
+        
+        lead_phone = ""
+        if lead.get("contacts"):
+            lead_phone = (lead["contacts"][0].get("phones") or [{}])[0].get("phone")
+        if not lead_phone:
+            lead_phone = custom_fields_dict.get("67ea8afafddd15001447f639")
 
-            normalized_phone = normalize_phone_number(lead_phone)
-            
-            if not normalized_phone:
-                print(f"A negociação '{lead_name}' não tem telefone. A ignorar.")
-                continue 
-            
-            if not find_lead_by_phone(normalized_phone):
-                # Passa o dicionário de campos personalizados para a função de criação
-                create_lead_in_notion(lead, normalized_phone, custom_fields_dict)
-    
+        normalized_phone = normalize_phone_number(lead_phone)
+        
+        if not normalized_phone:
+            print(f"A negociação '{lead_name}' não tem telefone. A ignorar.")
+            continue 
+        
+        if not find_lead_by_phone(normalized_phone):
+            create_lead_in_notion(lead, normalized_phone, custom_fields_dict)
+
     print("\n--- Script de sincronização finalizado ---")
