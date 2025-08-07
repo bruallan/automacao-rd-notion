@@ -1,0 +1,43 @@
+# Nome do Workflow que aparecerá no separador "Actions"
+name: Sincronizar Leads do RD Station com o Notion
+
+# Define quando o workflow deve ser executado
+on:
+  # Permite que seja executado manualmente a partir da interface do GitHub
+  workflow_dispatch:
+
+  # Executa a cada 15 minutos (sintaxe cron)
+  schedule:
+    - cron: '*/15 * * * *'
+
+# Define os "trabalhos" (jobs) a serem executados
+jobs:
+  sync:
+    # O tipo de máquina virtual que será usada para executar o trabalho
+    runs-on: ubuntu-latest
+
+    # Os passos que o trabalho executará em sequência
+    steps:
+      # 1. Faz o download do código do seu repositório para a máquina virtual
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      # 2. Configura o ambiente Python na máquina virtual
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Podemos usar uma versão moderna do Python
+
+      # 3. Instala as bibliotecas Python necessárias (no nosso caso, 'requests')
+      - name: Instalar dependências
+        run: pip install requests
+
+      # 4. Executa o nosso script Python
+      - name: Executar script de sincronização
+        # Passa os segredos do GitHub para o script como variáveis de ambiente
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          RD_CRM_TOKEN: ${{ secrets.RD_CRM_TOKEN }}
+          RD_STAGE_ID: ${{ secrets.RD_STAGE_ID }}
+        run: python sync_leads.py
