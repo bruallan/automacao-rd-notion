@@ -20,9 +20,14 @@ CUSTOM_FIELD_NAME_FOR_PHONE = "ID ou telefone"
 # --- FUNÇÕES ---
 
 def send_whatsapp_notification(message):
-    if not BOTCONversa_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
+    """Envia uma notificação via API do BotConversa."""
+    # ----- INÍCIO DA CORREÇÃO -----
+    # O nome da variável foi corrigido para ser totalmente maiúsculo.
+    if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
+    # ----- FIM DA CORREÇÃO -----
         print("!! Aviso: Segredos do WhatsApp não configurados. Notificação não enviada.")
         return
+
     api_url = "https://api.botconversa.com.br/v1/webhooks/send"
     headers = {"Authorization": f"Bearer {BOTCONVERSA_API_KEY}", "Content-Type": "application/json"}
     payload = {"phone": WHATSAPP_RECIPIENT_NUMBER, "type": "text", "value": message}
@@ -50,39 +55,28 @@ def find_lead_by_phone(normalized_phone):
     print("Lead não encontrado.")
     return False
 
-# ----- INÍCIO DA FUNÇÃO CORRIGIDA -----
 def create_lead_in_notion(lead, normalized_phone):
-    """Cria uma nova página no Notion, agora com verificação de erro real."""
     print(f"A criar o lead '{lead['name']}' com o telefone '{normalized_phone}' no Notion...")
-    
     url = "https://api.notion.com/v1/pages"
-    
     email = ""
     if lead.get("contacts"):
         email = (lead["contacts"][0].get("emails") or [{}])[0].get("email", "")
-
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
             "Nome (Completar)": {"title": [{"text": {"content": lead.get("name", "Negociação sem nome")}}]},
             "Email": {"email": email},
-            "Telefone": {"phone_number": normalized_phone}            
+            "Telefone": {"phone_number": normalized_phone}
         }
     }
-    
     response = requests.post(url, headers=NOTION_HEADERS, json=payload)
-    
-    # Verificação REAL da resposta da API
     if response.status_code == 200:
         print(f"Lead '{lead['name']}' criado com sucesso!")
     else:
-        # Se der erro, imprime o status e a mensagem de erro que o Notion enviou
         print(f"### ERRO AO CRIAR LEAD NO NOTION ###")
         print(f"Status Code: {response.status_code}")
         print(f"Resposta do Notion: {response.text}")
         print(f"####################################")
-
-# ----- FIM DA FUNÇÃO CORRIGIDA -----
 
 def fetch_rd_station_leads():
     print("A buscar negociações no RD Station CRM...")
@@ -97,7 +91,7 @@ def fetch_rd_station_leads():
         print(f"Erro ao buscar negociações no RD Station: {e}")
         return []
 
-# --- FLUXO PRINCIPAL (Sem alterações) ---
+# --- FLUXO PRINCIPAL ---
 if __name__ == "__main__":
     print("--- A iniciar o script de sincronização ---")
     rd_leads = fetch_rd_station_leads()
