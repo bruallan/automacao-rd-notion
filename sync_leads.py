@@ -64,10 +64,9 @@ def create_lead_in_notion(lead, normalized_phone):
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
-            "Nome do Lead": {"title": [{"text": {"content": lead.get("name", "Negociação sem nome")}}]},
+            "Nome (Completar)": {"title": [{"text": {"content": lead.get("name", "Negociação sem nome")}}]},
             "Email": {"email": email},
-            "Telefone": {"phone_number": normalized_phone},
-            "ID do Lead no RD": {"rich_text": [{"text": {"content": str(lead.get("id", ""))}}]}
+            "Telefone": {"phone_number": normalized_phone}            
         }
     }
     
