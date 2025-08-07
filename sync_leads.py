@@ -20,14 +20,9 @@ CUSTOM_FIELD_NAME_FOR_PHONE = "ID ou telefone"
 # --- FUNÇÕES ---
 
 def send_whatsapp_notification(message):
-    """Envia uma notificação via API do BotConversa."""
-    # ----- INÍCIO DA CORREÇÃO -----
-    # O nome da variável foi corrigido para ser totalmente maiúsculo.
     if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
-    # ----- FIM DA CORREÇÃO -----
         print("!! Aviso: Segredos do WhatsApp não configurados. Notificação não enviada.")
         return
-
     api_url = "https://api.botconversa.com.br/v1/webhooks/send"
     headers = {"Authorization": f"Bearer {BOTCONVERSA_API_KEY}", "Content-Type": "application/json"}
     payload = {"phone": WHATSAPP_RECIPIENT_NUMBER, "type": "text", "value": message}
@@ -57,21 +52,35 @@ def find_lead_by_phone(normalized_phone):
 
 def create_lead_in_notion(lead, normalized_phone):
     print(f"A criar o lead '{lead['name']}' com o telefone '{normalized_phone}' no Notion...")
+    
     url = "https://api.notion.com/v1/pages"
+    
+    # Extrai o email de forma segura
     email = ""
     if lead.get("contacts"):
         email = (lead["contacts"][0].get("emails") or [{}])[0].get("email", "")
+
+    # ----- INÍCIO DAS CORREÇÕES FINAIS -----
+    # 1. Converte strings vazias para 'None', que se torna 'null' no JSON para a API do Notion.
+    email_for_notion = email if email else None
+    phone_for_notion = normalized_phone if normalized_phone else None
+
+    # 2. Usa o nome da coluna EXATO da sua base de dados do Notion.
     payload = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
             "Nome (Completar)": {"title": [{"text": {"content": lead.get("name", "Negociação sem nome")}}]},
-            "Email": {"email": email},
-            "Telefone": {"phone_number": normalized_phone}
+            "Email": {"email": email_for_notion},
+            "Telefone": {"phone_number": phone_for_notion},
+            "ID do Lead no RD": {"rich_text": [{"text": {"content": str(lead.get("id", ""))}}]}
         }
     }
+    # ----- FIM DAS CORREÇÕES FINAIS -----
+    
     response = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    
     if response.status_code == 200:
-        print(f"Lead '{lead['name']}' criado com sucesso!")
+        print(f"Lead '{lead['name']}' CRIADO COM SUCESSO NO NOTION!")
     else:
         print(f"### ERRO AO CRIAR LEAD NO NOTION ###")
         print(f"Status Code: {response.status_code}")
@@ -79,6 +88,7 @@ def create_lead_in_notion(lead, normalized_phone):
         print(f"####################################")
 
 def fetch_rd_station_leads():
+    # ... (função sem alterações)
     print("A buscar negociações no RD Station CRM...")
     url = f"https://crm.rdstation.com/api/v1/deals?token={RD_CRM_TOKEN}&deal_stage_id={RD_STAGE_ID}"
     try:
@@ -92,18 +102,16 @@ def fetch_rd_station_leads():
         return []
 
 # --- FLUXO PRINCIPAL ---
+# ... (fluxo principal sem alterações)
 if __name__ == "__main__":
     print("--- A iniciar o script de sincronização ---")
     rd_leads = fetch_rd_station_leads()
-    
     if rd_leads:
         for lead in rd_leads:
             lead_name = lead.get('name', 'Nome Desconhecido')
             print(f"\nA processar negociação: {lead_name}")
-            
             lead_phone = ""
             no_contact_warning_sent = False 
-
             contacts_list = lead.get("contacts", [])
             if contacts_list:
                 contact = contacts_list[0]
@@ -113,7 +121,6 @@ if __name__ == "__main__":
                 message = f"Atenção: A negociação do RD \"{lead_name}\" está sem contato associado. Tentando buscar telefone em campos personalizados."
                 send_whatsapp_notification(message)
                 no_contact_warning_sent = True 
-
             if not lead_phone:
                 print("A procurar telefone em campos personalizados...")
                 custom_fields = lead.get("deal_custom_fields", [])
@@ -122,17 +129,13 @@ if __name__ == "__main__":
                         lead_phone = field.get("value")
                         print("Telefone encontrado no campo personalizado.")
                         break
-
             normalized_phone = normalize_phone_number(lead_phone)
-            
             if not normalized_phone:
                 if no_contact_warning_sent:
                     message = f"Falha: A negociação do RD \"{lead_name}\" está sem contato associado E sem telefone no campo personalizado. Nenhuma ação foi tomada."
                     send_whatsapp_notification(message)
                 print(f"A negociação '{lead_name}' não tem um número de telefone válido em nenhum campo. A ignorar.")
                 continue 
-            
             if not find_lead_by_phone(normalized_phone):
                 create_lead_in_notion(lead, normalized_phone)
-    
     print("\n--- Script de sincronização finalizado ---")
