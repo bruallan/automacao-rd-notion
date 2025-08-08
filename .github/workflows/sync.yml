@@ -8,7 +8,7 @@ on:
 
   # Executa a cada 15 minutos (sintaxe cron)
    schedule:
-     - cron: '*/15 * * * *'
+     - cron: '*/55 * * * *'
 
 # Define os "trabalhos" (jobs) a serem executados
 jobs:
