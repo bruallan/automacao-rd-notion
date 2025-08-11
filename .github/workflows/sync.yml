@@ -3,12 +3,12 @@ name: Sincronizar Leads do RD Station com o Notion
 
 # Define quando o workflow deve ser executado
 on:
-  # Permite que seja executado manualmente a partir da interface do GitHub
+  # Permite que seja executado manualmente
   workflow_dispatch:
 
-  # Executa a cada 15 minutos (sintaxe cron)
-   schedule:
-     - cron: '*/55 * * * *'
+  # Executa a cada 55 minutos (sintaxe cron)
+  schedule: # <--- Corrigido, sem os espaços extras
+    - cron: '*/55 * * * *'
 
 # Define os "trabalhos" (jobs) a serem executados
 jobs:
