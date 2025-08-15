@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
   # Executa a cada 55 minutos (sintaxe cron)
-  schedule: # <--- Corrigido, sem os espaços extras
+  schedule:
     - cron: '*/55 * * * *'
 
 # Define os "trabalhos" (jobs) a serem executados
@@ -26,18 +26,22 @@ jobs:
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # Podemos usar uma versão moderna do Python
+          python-version: '3.10'
 
-      # 3. Instala as bibliotecas Python necessárias (no nosso caso, 'requests')
+      # 3. Instala as bibliotecas a partir do requirements.txt <--- CORREÇÃO 1
       - name: Instalar dependências
-        run: pip install requests
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       # 4. Executa o nosso script Python
       - name: Executar script de sincronização
-        # Passa os segredos do GitHub para o script como variáveis de ambiente
+        # Passa TODOS os segredos para o script <--- CORREÇÃO 2
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           RD_CRM_TOKEN: ${{ secrets.RD_CRM_TOKEN }}
           RD_STAGE_ID: ${{ secrets.RD_STAGE_ID }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: python sync_leads.py
