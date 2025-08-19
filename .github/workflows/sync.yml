@@ -34,6 +34,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 3.1 Diagnosticar segredos
+      - name: Diagnosticar Segredos
+        run: |
+          if [ -z "${{ secrets.GDRIVE_CREDENTIALS }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo GDRIVE_CREDENTIALS está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo GDRIVE_CREDENTIALS foi encontrado."; fi
+          if [ -z "${{ secrets.GDRIVE_TOKEN_JSON }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo GDRIVE_TOKEN_JSON está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo GDRIVE_TOKEN_JSON foi encontrado."; fi
+          if [ -z "${{ secrets.BOTCONVERSA_API_KEY }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo BOTCONVERSA_API_KEY está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo BOTCONVERSA_API_KEY foi encontrado."; fi
+          if [ -z "${{ secrets.WHATSAPP_RECIPIENT_NUMBER }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo WHATSAPP_RECIPIENT_NUMBER está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo WHATSAPP_RECIPIENT_NUMBER foi encontrado."; fi
+
       # 4. Executa o nosso script Python
       - name: Executar script de sincronização
         # Passa TODOS os segredos para o script <--- CORREÇÃO 2
