@@ -23,28 +23,25 @@ GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
 GDRIVE_CREDENTIALS_JSON = os.environ.get("GDRIVE_CREDENTIALS_JSON", "").strip()
 GDRIVE_TOKEN_JSON = os.environ.get("GDRIVE_TOKEN_JSON", "").strip()
 
-# --- MAPEAMENTO DE ETAPAS DO RD PARA SITUAÇÕES DO NOTION ---
+# --- MAPEAMENTOS ---
 RD_STAGES_MAP = {
     "67ae261cab5a8e00178ea863": "Avaliando",
     "67bcd1b67d60d4001b8c8aa2": "Condicionado",
     "67ae261cab5a8e00178ea864": "Aprovado",
     "67ae261cab5a8e00178ea865": "Com Reserva",
 }
-
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28",
 }
 
-# --- FUNÇÕES DE BACKUP E UPLOAD ---
+# --- FUNÇÕES DE BACKUP E UPLOAD (JÁ FUNCIONAIS) ---
 def upload_to_google_drive(filename):
-    """Faz o upload de um ficheiro para o Google Drive."""
     print(f"--- A iniciar o upload do backup para o Google Drive: '{filename}' ---")
     try:
         if not GDRIVE_CREDENTIALS_JSON or not GDRIVE_TOKEN_JSON:
-            print("### ERRO: Credenciais ou token do Google Drive não encontrados. Verifique os GitHub Secrets. ###")
-            return
+            print("### ERRO: Credenciais ou token do Google Drive não encontrados. Verifique os GitHub Secrets. ###"); return
         creds_info = json.loads(GDRIVE_CREDENTIALS_JSON)
         token_info = json.loads(GDRIVE_TOKEN_JSON)
         creds = google.oauth2.credentials.Credentials.from_authorized_user_info(token_info, scopes=["https://www.googleapis.com/auth/drive"])
@@ -81,8 +78,7 @@ def backup_notion_database():
             response.raise_for_status()
             data = response.json()
             all_pages.extend(data['results'])
-            has_more = data['has_more']
-            next_cursor = data['next_cursor']
+            has_more, next_cursor = data['has_more'], data['next_cursor']
         except requests.exceptions.RequestException as e:
             print(f"### ERRO AO BUSCAR DADOS DO NOTION PARA BACKUP: {e} ###"); return
     if not all_pages:
@@ -114,21 +110,56 @@ def backup_notion_database():
             os.remove(filename)
             print(f"Ficheiro temporário '{filename}' apagado.")
 
-# --- FUNÇÕES DE SINCRONIZAÇÃO E WHATSAPP ---
+# --- FUNÇÕES DE WHATSAPP (CORRIGIDAS) ---
+
+def get_subscriber_id(phone_number):
+    """Busca o ID de um subscritor no BotConversa pelo número de telefone."""
+    url = f"https://backend.botconversa.com.br/api/v1/subscriber/?phone={phone_number}"
+    headers = {"API-KEY": BOTCONVERSA_API_KEY}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if data and len(data) > 0 and data[0].get("id"):
+            return data[0]["id"]
+        else:
+            print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa.")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"### ERRO ao buscar ID do subscritor no BotConversa: {e}")
+        return None
 
 def send_whatsapp_message(message):
+    """Encontra o ID do subscritor e envia a mensagem para o WhatsApp."""
     if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
         print("!! Aviso: API Key do BotConversa ou número do destinatário não configurados. Mensagem não enviada.")
         return
-    url = "https://backend.botconversa.com.br/api/v1/webhook/send/"
-    headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
-    payload = {"type": "text", "phone": WHATSAPP_RECIPIENT_NUMBER, "message": message}
+
+    subscriber_id = get_subscriber_id(WHATSAPP_RECIPIENT_NUMBER)
+    if not subscriber_id:
+        print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
+        return
+
+    # Usando o endpoint validado pelo seu outro script
+    url = f"https://backend.botconversa.com.br/api/v1/webhook/subscriber/{subscriber_id}/send_message/"
+    headers = {
+        "Content-Type": "application/json",
+        "API-KEY": BOTCONVERSA_API_KEY
+    }
+    # Usando o payload validado pelo seu outro script
+    payload = {
+        "type": "text",
+        "value": message
+    }
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         print("   - Mensagem de resumo enviada para o WhatsApp.")
     except requests.exceptions.RequestException as e:
         print(f"   ### ERRO ao enviar mensagem para o WhatsApp: {e}")
+
+
+# --- FUNÇÕES DE SINCRONIZAÇÃO (RESTANTES) ---
 
 def get_existing_notion_leads():
     print("A buscar leads existentes no Notion para mapeamento...")
@@ -178,59 +209,43 @@ def normalize_phone_number(phone_str):
 # --- FLUXO PRINCIPAL (MODO DE SIMULAÇÃO) ---
 if __name__ == "__main__":
     
-    # 1. Executa o backup primeiro
     backup_notion_database()
 
-    # 2. Prepara para a simulação da sincronização
     print("\n--- A INICIAR SIMULAÇÃO DE SINCRONIZAÇÃO (nenhuma alteração será feita no Notion) ---")
     leads_a_criar, leads_a_atualizar = [], []
-    
     rd_id_map, phone_map = get_existing_notion_leads()
-    
     for stage_id, notion_situacao in RD_STAGES_MAP.items():
         print(f"\nA analisar etapa do RD: {stage_id} (Situação no Notion: '{notion_situacao}')")
         rd_leads_in_stage = fetch_rd_station_leads_by_stage(stage_id)
         if not rd_leads_in_stage: print("Nenhum lead encontrado nesta etapa."); continue
-        
         for lead in rd_leads_in_stage:
-            rd_lead_id = lead["id"]
-            lead_name = lead.get("name", "Nome Desconhecido")
+            rd_lead_id, lead_name = lead["id"], lead.get("name", "Nome Desconhecido")
             lead_phone = ""
             if lead.get("contacts"):
                 phones = (lead["contacts"][0].get("phones") or [{}])
                 if phones: lead_phone = phones[0].get("phone")
             normalized_phone = normalize_phone_number(lead_phone)
-            
             page_info = rd_id_map.get(rd_lead_id)
             if not page_info and normalized_phone:
                 page_info = phone_map.get(normalized_phone)
-            
             if page_info:
-                # Lógica de atualização (apenas para o relatório)
                 leads_a_atualizar.append(f"- *Atualizaria:* {lead_name} (ID: {rd_lead_id})")
             else:
-                # Lógica de criação (apenas para o relatório)
                 leads_a_criar.append(f"- *Criaria:* {lead_name} (Telefone: {normalized_phone})")
 
-    # 3. Envia o relatório da simulação para o WhatsApp
     print("\n--- A preparar o relatório da simulação ---")
     final_report = "🤖 *Relatório de Simulação da Sincronização RD -> Notion*\n\nNenhuma alteração foi feita na base de dados. Este é um resumo do que o script *teria* feito:\n\n---\n\n"
-    
     if leads_a_criar:
         final_report += "✅ *Novos Leads a Serem Criados:*\n" + "\n".join(leads_a_criar)
     else:
         final_report += "✅ *Nenhum lead novo para criar.*\n"
-        
     final_report += "\n\n---\n\n"
-
     if leads_a_atualizar:
         final_report += "🔄 *Leads Existentes a Serem Atualizados:*\n" + "\n".join(leads_a_atualizar)
     else:
         final_report += "🔄 *Nenhum lead existente para atualizar.*\n"
-    
     if leads_a_criar or leads_a_atualizar:
         send_whatsapp_message(final_report)
     else:
         print("Nenhuma ação de criação ou atualização teria sido executada.")
-
     print("\n--- SCRIPT DE SIMULAÇÃO FINALIZADO ---")
