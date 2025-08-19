@@ -19,6 +19,7 @@ RD_STAGE_ID = os.environ.get("RD_STAGE_ID", "").strip()
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
 # As credenciais são lidas da variável de ambiente como uma string JSON
 GDRIVE_CREDENTIALS_JSON = os.environ.get("GDRIVE_CREDENTIALS", "").strip()
+GDRIVE_TOKEN_JSON = os.environ.get("GDRIVE_TOKEN_JSON", "").strip() # <--- ESTA LINHA PROVAVELMENTE ESTÁ A FALTAR
 
 
 NOTION_HEADERS = {
