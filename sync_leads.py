@@ -36,7 +36,8 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-# --- FUNÇÕES DE BACKUP E UPLOAD (JÁ FUNCIONAIS) ---
+# --- FUNÇÕES DE BACKUP E UPLOAD ---
+# (Estas funções já estão a funcionar corretamente e não foram alteradas)
 def upload_to_google_drive(filename):
     print(f"--- A iniciar o upload do backup para o Google Drive: '{filename}' ---")
     try:
@@ -78,7 +79,8 @@ def backup_notion_database():
             response.raise_for_status()
             data = response.json()
             all_pages.extend(data['results'])
-            has_more, next_cursor = data['has_more'], data['next_cursor']
+            has_more = data['has_more']
+            next_cursor = data['next_cursor']
         except requests.exceptions.RequestException as e:
             print(f"### ERRO AO BUSCAR DADOS DO NOTION PARA BACKUP: {e} ###"); return
     if not all_pages:
@@ -110,23 +112,30 @@ def backup_notion_database():
             os.remove(filename)
             print(f"Ficheiro temporário '{filename}' apagado.")
 
-# --- FUNÇÕES DE WHATSAPP (CORRIGIDAS) ---
+# --- FUNÇÕES DE WHATSAPP (TOTALMENTE REESCRITAS) ---
 
 def get_subscriber_id(phone_number):
-    """Busca o ID de um subscritor no BotConversa pelo número de telefone."""
-    url = f"https://backend.botconversa.com.br/api/v1/subscriber/?phone={phone_number}"
+    """Busca o ID de um subscritor no BotConversa, procurando em toda a lista de subscritores."""
+    print(f"   - A procurar o ID do subscritor para o número: {phone_number}")
+    # Endpoint para listar todos os subscritores
+    url = "https://backend.botconversa.com.br/api/v1/subscriber/"
     headers = {"API-KEY": BOTCONVERSA_API_KEY}
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        data = response.json()
-        if data and len(data) > 0 and data[0].get("id"):
-            return data[0]["id"]
-        else:
-            print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa.")
-            return None
+        subscribers = response.json()
+        
+        # Procura na lista pelo número de telefone correspondente
+        for subscriber in subscribers:
+            if subscriber.get("phone") == phone_number:
+                subscriber_id = subscriber.get("id")
+                print(f"   - ID do subscritor encontrado: {subscriber_id}")
+                return subscriber_id
+        
+        print(f"!! Aviso: Subscritor com o número {phone_number} não foi encontrado na sua lista do BotConversa.")
+        return None
     except requests.exceptions.RequestException as e:
-        print(f"### ERRO ao buscar ID do subscritor no BotConversa: {e}")
+        print(f"### ERRO ao buscar lista de subscritores no BotConversa: {e}")
         return None
 
 def send_whatsapp_message(message):
@@ -140,13 +149,12 @@ def send_whatsapp_message(message):
         print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
         return
 
-    # Usando o endpoint validado pelo seu outro script
-    url = f"https://backend.botconversa.com.br/api/v1/webhook/subscriber/{subscriber_id}/send_message/"
+    # Usando o endpoint e o payload validados pelo seu outro script
+    url = f"https://backend.botconversa.com.br/webhook/subscriber/{subscriber_id}/send_message/"
     headers = {
         "Content-Type": "application/json",
         "API-KEY": BOTCONVERSA_API_KEY
     }
-    # Usando o payload validado pelo seu outro script
     payload = {
         "type": "text",
         "value": message
@@ -160,7 +168,7 @@ def send_whatsapp_message(message):
 
 
 # --- FUNÇÕES DE SINCRONIZAÇÃO (RESTANTES) ---
-
+# (Estas funções não foram alteradas)
 def get_existing_notion_leads():
     print("A buscar leads existentes no Notion para mapeamento...")
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
