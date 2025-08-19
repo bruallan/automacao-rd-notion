@@ -5,7 +5,6 @@ import re
 import csv
 import datetime
 import json
-from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -54,8 +53,10 @@ def upload_to_google_drive(filename):
         creds_info = json.loads(GDRIVE_CREDENTIALS_JSON)
         token_info = json.loads(GDRIVE_TOKEN_JSON) # Usa o novo segredo
 
-        creds = Credentials.from_authorized_user_info(token_info, scopes=["https://www.googleapis.com/auth/drive"])
-        
+        # LINHA NOVA E CORRIGIDA
+        import google.oauth2.credentials
+        creds = google.oauth2.credentials.Credentials.from_authorized_user_info(token_info, scopes=["https://www.googleapis.com/auth/drive"])
+                
         service = build('drive', 'v3', credentials=creds)
         
         file_metadata = {
