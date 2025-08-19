@@ -45,13 +45,15 @@ def upload_to_google_drive(filename):
     """Faz o upload de um ficheiro para uma pasta específica no Google Drive."""
     print(f"--- A iniciar o upload para o Google Drive: '{filename}' ---")
     try:
-        if not GDRIVE_CREDENTIALS_JSON:
-            print("### ERRO: Credenciais do Google Drive não encontradas. Verifique os GitHub Secrets. ###")
+        if not GDRIVE_CREDENTIALS_JSON or not GDRIVE_TOKEN_JSON: # Verifica o novo segredo
+            print("### ERRO: Credenciais ou token do Google Drive não encontrados...")
             return
         
         # Carrega as credenciais a partir da string JSON
-        creds_dict = json.loads(GDRIVE_CREDENTIALS_JSON)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/drive"])
+        creds_info = json.loads(GDRIVE_CREDENTIALS_JSON)
+        token_info = json.loads(GDRIVE_TOKEN_JSON) # Usa o novo segredo
+
+        creds = Credentials.from_authorized_user_info(token_info, scopes=["https://www.googleapis.com/auth/drive"])
         
         service = build('drive', 'v3', credentials=creds)
         
