@@ -9,9 +9,9 @@ NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
 RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 
-# --- NOVO: CONFIGURAÇÕES DO WHATSAPP ---
+# --- CONFIGURAÇÕES DO WHATSAPP ---
 BOTCONVERSA_API_KEY = os.environ.get("BOTCONVERSA_API_KEY", "").strip()
-WHATSAPP_RECIPIENT_NUMBER_BRUNO = os.environ.get("WHATSAPP_RECIPIENT_NUMBER", "").strip()
+WHATSAPP_RECIPIENT_NUMBER = os.environ.get("WHATSAPP_RECIPIENT_NUMBER", "").strip()
 
 # --- MAPEAMENTO DE ETAPAS DO RD PARA SITUAÇÕES DO NOTION ---
 RD_STAGES_MAP = {
@@ -23,7 +23,6 @@ RD_STAGES_MAP = {
 
 # --- MAPEAMENTO COMPLETO DE CAMPOS PERSONALIZADOS DO RD PARA O NOTION ---
 NOTION_RD_MAP = {
-    # ... (o seu mapa de campos continua o mesmo)
     "67ea8afafddd15001447f639": {"notion_name": "ID (RD Station)", "notion_type": "text"},
     "67b62f4fad0a4e0014841510": {"notion_name": "De onde é?", "notion_type": "text"},
     "689cf258cece270014dbb4bc": {"notion_name": "Aluguel", "notion_type": "number"},
@@ -52,24 +51,15 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-# --- NOVO: FUNÇÃO DE INTEGRAÇÃO COM WHATSAPP ---
-
+# --- FUNÇÃO DE INTEGRAÇÃO COM WHATSAPP ---
 def send_whatsapp_message(message):
     """Envia uma mensagem de texto para o WhatsApp via BotConversa."""
-    if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER_BRUNO:
+    if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
         print("!! Aviso: API Key do BotConversa ou número do destinatário não configurados. Mensagem não enviada.")
         return
-
     url = "https://backend.botconversa.com.br/api/v1/webhook/send/"
-    headers = {
-        "Content-Type": "application/json",
-        "API-KEY": BOTCONVERSA_API_KEY
-    }
-    payload = {
-        "type": "text",
-        "phone": WHATSAPP_RECIPIENT_NUMBER_BRUNO,
-        "message": message
-    }
+    headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
+    payload = {"type": "text", "phone": WHATSAPP_RECIPIENT_NUMBER, "message": message}
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
@@ -77,10 +67,8 @@ def send_whatsapp_message(message):
     except requests.exceptions.RequestException as e:
         print(f"   ### ERRO ao enviar mensagem para o WhatsApp: {e}")
 
-# --- FUNÇÕES AUXILIARES E DE SINCRONIZAÇÃO (ATUALIZADAS) ---
-
+# --- FUNÇÕES AUXILIARES E DE SINCRONIZAÇÃO ---
 def format_notion_property(value, notion_type):
-    # ... (Função de formatação continua a mesma)
     if value is None or str(value).strip() == "": return None
     try:
         if notion_type == "text": return {"rich_text": [{"text": {"content": str(value)}}]}
@@ -95,10 +83,9 @@ def format_notion_property(value, notion_type):
     return None
 
 def build_properties_payload(lead_data, situacao):
-    # ... (Função de construção de payload continua a mesma)
     properties = {}
-    properties["Nome (Completar)"] = {"title": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]}
-    properties["ID (RD Station)"] = {"rich_text": [{"text": {"content": lead_data["id"]}}]}
+    properties["Nome (Completar)"] = {"rich_text": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]} # CORRIGIDO PARA TEXTO
+    properties["ID (RD Station)"] = {"title": [{"text": {"content": lead_data["id"]}}]} # CORRIGIDO PARA TÍTULO
     properties["Status"] = {"multi_select": [{"name": situacao}]}
     lead_phone = ""
     if lead_data.get("contacts"):
@@ -115,7 +102,7 @@ def build_properties_payload(lead_data, situacao):
     return properties
 
 def get_existing_notion_leads():
-    """ATUALIZADO: Busca leads e retorna dois dicionários, um por ID do RD e outro por Telefone."""
+    """ATUALIZADO: Lê a propriedade 'Título' para o ID do RD e busca por telefone."""
     print("A buscar leads existentes no Notion para mapeamento...")
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     rd_id_map, phone_map = {}, {}
@@ -132,12 +119,15 @@ def get_existing_notion_leads():
         for page in data["results"]:
             page_id = page["id"]
             props = page["properties"]
-            current_status = (props.get("Status", {}).get("multi_select") or [{}])[0].get("name")
+            current_status_list = props.get("Status", {}).get("multi_select", [])
+            current_status = current_status_list[0]["name"] if current_status_list else None
             
+            # --- LÓGICA CORRIGIDA PARA LER O ID DO RD DA PROPRIEDADE TÍTULO ---
             try:
                 rd_id_prop = props.get("ID (RD Station)", {})
-                if rd_id_prop.get("rich_text"):
-                    rd_id = rd_id_prop["rich_text"][0]["text"]["content"]
+                id_field_list = rd_id_prop.get("title") # Procura pela chave 'title'
+                if id_field_list:
+                    rd_id = id_field_list[0]["text"]["content"]
                     if rd_id: rd_id_map[rd_id] = {"page_id": page_id, "status": current_status}
             except (IndexError, KeyError): pass
             
@@ -154,55 +144,46 @@ def get_existing_notion_leads():
     return rd_id_map, phone_map
 
 def update_lead_in_notion(page_info, lead_data, situacao):
-    """ATUALIZADO: Implementa a lógica híbrida de atualização."""
+    # ... (Esta função continua a mesma)
     rd_lead_id = lead_data["id"]
     lead_name = lead_data.get("name", "Nome Desconhecido")
     print(f"  -> A ATUALIZAR lead no Notion: '{lead_name}' (ID do RD: {rd_lead_id})")
-    
     url = f"https://api.notion.com/v1/pages/{page_info['page_id']}"
     properties_payload = build_properties_payload(lead_data, situacao)
-    
-    # Lógica de exceção para o Status
     current_status = page_info.get("status")
     if current_status and current_status != situacao:
         print(f"  !! Aviso: Status no Notion ('{current_status}') é diferente do esperado ('{situacao}'). O Status não será alterado.")
-        del properties_payload["Status"] # Remove o status do payload para não o alterar
-        # Envia notificação no WhatsApp sobre a divergência
-        whatsapp_alert = (
-            f"⚠️ *Alerta de Sincronização*\n\n"
-            f"O lead *{lead_name}* foi atualizado, mas o status não foi alterado.\n\n"
-            f"*- Status no Notion:* {current_status}\n"
-            f"*- Etapa no RD Station deveria ser:* {situacao}\n\n"
-            f"Por favor, verifique se a divergência é intencional."
-        )
+        del properties_payload["Status"]
+        whatsapp_alert = (f"⚠️ *Alerta de Sincronização*\n\nO lead *{lead_name}* foi atualizado, mas o status não foi alterado.\n\n- *Status no Notion:* {current_status}\n- *Etapa no RD Station deveria ser:* {situacao}\n\nPor favor, verifique se a divergência é intencional.")
         send_whatsapp_message(whatsapp_alert)
-
     payload = {"properties": properties_payload}
     response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
     if response.status_code == 200: return f"- Lead atualizado: *{lead_name}*\n  (Status: {current_status or situacao})"
     else: print(f"  ### ERRO ao atualizar lead no Notion: {response.text}"); return None
 
 def create_lead_in_notion(lead_data, situacao):
-    """ATUALIZADO: Cria um novo lead e retorna um resumo para o WhatsApp."""
+    # ... (Esta função continua a mesma)
     lead_name = lead_data.get("name", "Negociação sem nome")
     print(f"  -> A CRIAR novo lead no Notion: '{lead_name}'")
     url = "https://api.notion.com/v1/pages"
+    # --- CORREÇÃO DE LÓGICA: "Nome (Completar)" é um campo de texto, não o título principal ---
+    # O Título principal será o "ID (RD Station)"
     properties_payload = build_properties_payload(lead_data, situacao)
+    # Troca o "Nome (Completar)" de título para texto simples se necessário
+    if "Nome (Completar)" in properties_payload and "title" in properties_payload["Nome (Completar)"]:
+        properties_payload["Nome (Completar)"] = {"rich_text": properties_payload["Nome (Completar)"]["title"]}
+    
     payload = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties_payload}
     response = requests.post(url, headers=NOTION_HEADERS, json=payload)
-
     if response.status_code == 200:
         lead_phone = properties_payload.get("Telefone", {}).get("phone_number", "N/A")
-        return (f"*Lead Adicionado*\n"
-                f"- *Nome:* {lead_name}\n"
-                f"- *Telefone:* {lead_phone}\n"
-                f"- *Status:* {situacao}")
+        return (f"*Lead Adicionado*\n- *Nome:* {lead_name}\n- *Telefone:* {lead_phone}\n- *Status:* {situacao}")
     else:
         print(f"  ### ERRO ao criar lead no Notion: {response.text}")
         return None
 
 def fetch_rd_station_leads_by_stage(stage_id):
-    # ... (Função continua a mesma)
+    # ... (Esta função continua a mesma)
     url = f"https://crm.rdstation.com/api/v1/deals?token={RD_CRM_TOKEN}&deal_stage_id={stage_id}"
     try: response = requests.get(url); response.raise_for_status(); return response.json().get("deals", [])
     except requests.exceptions.RequestException as e: print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}"); return []
@@ -210,21 +191,17 @@ def fetch_rd_station_leads_by_stage(stage_id):
 def normalize_phone_number(phone_str):
     if not phone_str: return ""; return re.sub(r'\D', '', phone_str)
 
-# --- FLUXO PRINCIPAL DE SINCRONIZAÇÃO ---
+# --- FLUXO PRINCIPAL ---
 if __name__ == "__main__":
+    # ... (O fluxo principal continua o mesmo)
     print("\n--- A INICIAR SCRIPT DE SINCRONIZAÇÃO RD -> NOTION (VERSÃO FINAL) ---")
-    
-    created_leads_summary = []
-    updated_leads_summary = []
-    
+    created_leads_summary, updated_leads_summary = [], []
     rd_id_map, phone_map = get_existing_notion_leads()
-    
     for stage_id, notion_situacao in RD_STAGES_MAP.items():
         print(f"\nA processar etapa do RD: {stage_id} (Situação no Notion: '{notion_situacao}')")
         rd_leads_in_stage = fetch_rd_station_leads_by_stage(stage_id)
         if not rd_leads_in_stage: print("Nenhum lead encontrado nesta etapa."); continue
         print(f"Encontrados {len(rd_leads_in_stage)} leads.")
-        
         for lead in rd_leads_in_stage:
             rd_lead_id = lead["id"]
             lead_phone = ""
@@ -232,21 +209,16 @@ if __name__ == "__main__":
                 phones = (lead["contacts"][0].get("phones") or [{}])
                 if phones: lead_phone = phones[0].get("phone")
             normalized_phone = normalize_phone_number(lead_phone)
-            
             print(f"\n--- A processar Lead: {lead.get('name')} (ID RD: {rd_lead_id}) ---")
-            
             page_info = rd_id_map.get(rd_lead_id)
             if not page_info and normalized_phone:
                 page_info = phone_map.get(normalized_phone)
-
             if page_info:
                 summary = update_lead_in_notion(page_info, lead, notion_situacao)
                 if summary: updated_leads_summary.append(summary)
             else:
                 summary = create_lead_in_notion(lead, notion_situacao)
                 if summary: created_leads_summary.append(summary)
-
-    # --- NOVO: Envio do Relatório Final para o WhatsApp ---
     print("\n--- A preparar o relatório final da sincronização ---")
     final_report = ""
     if created_leads_summary:
@@ -254,10 +226,8 @@ if __name__ == "__main__":
     if updated_leads_summary:
         if final_report: final_report += "\n\n---\n\n"
         final_report += "🔄 *Leads Existentes que Foram Atualizados*\n\n" + "\n".join(updated_leads_summary)
-    
     if final_report:
         send_whatsapp_message(final_report)
     else:
         print("Nenhuma alteração foi realizada. Nenhum relatório a ser enviado.")
-
     print("\n--- SCRIPT DE SINCRONIZAÇÃO FINALIZADO ---")
