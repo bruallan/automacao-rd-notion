@@ -149,7 +149,7 @@ def backup_notion_database():
     
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=header_list)
+            writer = csv.DictWriter(csvfile, fieldnames=header_list, delimiter=';')
             writer.writeheader()
             writer.writerows(processed_data)
         print(f"Ficheiro de backup temporário '{filename}' criado com sucesso.")
