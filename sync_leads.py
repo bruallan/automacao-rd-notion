@@ -5,6 +5,7 @@ import re
 import csv
 import datetime
 import json
+import time
 import google.oauth2.credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -17,6 +18,8 @@ RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 # --- CONFIGURAÇÕES DO WHATSAPP ---
 BOTCONVERSA_API_KEY = os.environ.get("BOTCONVERSA_API_KEY", "").strip()
 WHATSAPP_RECIPIENT_NUMBER = os.environ.get("WHATSAPP_RECIPIENT_NUMBER", "").strip()
+# A partir do seu código, deduzimos que a base URL para webhooks é esta
+BOTCONVERSA_BASE_URL = "https://backend.botconversa.com.br" 
 
 # --- CONFIGURAÇÕES DO GOOGLE DRIVE ---
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
@@ -96,7 +99,7 @@ def backup_notion_database():
     header_list = sorted(list(all_headers))
     for row in temp_processed:
         processed_data.append({header: row.get(header, "") for header in header_list})
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"backup_notion_{timestamp}.csv"
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -112,31 +115,42 @@ def backup_notion_database():
             os.remove(filename)
             print(f"Ficheiro temporário '{filename}' apagado.")
 
-# --- FUNÇÕES DE WHATSAPP (TOTALMENTE REESCRITAS) ---
+# --- FUNÇÕES DE WHATSAPP (TOTALMENTE REESCRITAS BASEADO NO SEU SCRIPT) ---
 
-def get_subscriber_id(phone_number):
-    """Busca o ID de um subscritor no BotConversa, procurando em toda a lista de subscritores."""
-    print(f"   - A procurar o ID do subscritor para o número: {phone_number}")
-    # Endpoint para listar todos os subscritores
-    url = "https://backend.botconversa.com.br/api/v1/subscriber/"
+def get_subscriber_id(phone_number_to_find):
+    """Busca o ID de um subscritor no BotConversa, percorrendo a lista de subscritores."""
+    print(f"   - A procurar o ID do subscritor para o número: {phone_number_to_find}")
+    
+    # URL correta para listar os subscritores, baseada no seu script
+    url = f"{BOTCONVERSA_BASE_URL}/webhook/subscribers/" # 
     headers = {"API-KEY": BOTCONVERSA_API_KEY}
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        subscribers = response.json()
-        
-        # Procura na lista pelo número de telefone correspondente
-        for subscriber in subscribers:
-            if subscriber.get("phone") == phone_number:
-                subscriber_id = subscriber.get("id")
-                print(f"   - ID do subscritor encontrado: {subscriber_id}")
-                return subscriber_id
-        
-        print(f"!! Aviso: Subscritor com o número {phone_number} não foi encontrado na sua lista do BotConversa.")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"### ERRO ao buscar lista de subscritores no BotConversa: {e}")
-        return None
+    
+    page = 1
+    while url:
+        try:
+            print(f"   -> Lendo página {page} de contatos do BotConversa...")
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            for subscriber in data.get('results', []): # 
+                # Normaliza o telefone da lista para comparar
+                phone_in_list = re.sub(r'\D', '', str(subscriber.get('phone')))
+                if phone_in_list == phone_number_to_find:
+                    subscriber_id = subscriber.get("id")
+                    print(f"   - ID do subscritor encontrado: {subscriber_id}")
+                    return subscriber_id # 
+            
+            url = data.get('next') # 
+            page += 1
+            time.sleep(1) # Pausa amigável entre as páginas
+
+        except requests.exceptions.RequestException as e:
+            print(f"### ERRO ao buscar lista de subscritores no BotConversa: {e}")
+            return None
+            
+    print(f"!! Aviso: Subscritor com o número {phone_number_to_find} não foi encontrado na sua lista do BotConversa.")
+    return None
 
 def send_whatsapp_message(message):
     """Encontra o ID do subscritor e envia a mensagem para o WhatsApp."""
@@ -149,18 +163,13 @@ def send_whatsapp_message(message):
         print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
         return
 
-    # Usando o endpoint e o payload validados pelo seu outro script
-    url = f"https://backend.botconversa.com.br/webhook/subscriber/{subscriber_id}/send_message/"
-    headers = {
-        "Content-Type": "application/json",
-        "API-KEY": BOTCONVERSA_API_KEY
-    }
-    payload = {
-        "type": "text",
-        "value": message
-    }
+    # Usando o endpoint e o payload validados pelo seu script
+    url = f"{BOTCONVERSA_BASE_URL}/webhook/subscriber/{subscriber_id}/send_message/" # 
+    headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
+    payload = {"type": "text", "value": message} # 
+    
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         response.raise_for_status()
         print("   - Mensagem de resumo enviada para o WhatsApp.")
     except requests.exceptions.RequestException as e:
@@ -195,7 +204,7 @@ def get_existing_notion_leads():
             try:
                 phone_prop = props.get("Telefone", {})
                 if phone_prop.get("phone_number"):
-                    phone = normalize_phone_number(phone_prop["phone_number"])
+                    phone = re.sub(r'\D', '', str(phone_prop["phone_number"]))
                     if phone: phone_map[phone] = {"page_id": page_id, "status": current_status}
             except (IndexError, KeyError): pass
         has_more, next_cursor = data['has_more'], data['next_cursor']
@@ -210,9 +219,6 @@ def fetch_rd_station_leads_by_stage(stage_id):
         return response.json().get("deals", [])
     except requests.exceptions.RequestException as e:
         print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}"); return []
-
-def normalize_phone_number(phone_str):
-    if not phone_str: return ""; return re.sub(r'\D', '', phone_str)
 
 # --- FLUXO PRINCIPAL (MODO DE SIMULAÇÃO) ---
 if __name__ == "__main__":
@@ -232,7 +238,7 @@ if __name__ == "__main__":
             if lead.get("contacts"):
                 phones = (lead["contacts"][0].get("phones") or [{}])
                 if phones: lead_phone = phones[0].get("phone")
-            normalized_phone = normalize_phone_number(lead_phone)
+            normalized_phone = re.sub(r'\D', '', str(lead_phone))
             page_info = rd_id_map.get(rd_lead_id)
             if not page_info and normalized_phone:
                 page_info = phone_map.get(normalized_phone)
