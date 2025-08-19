@@ -5,21 +5,54 @@ import re
 import csv
 import datetime
 import json
+import google.oauth2.credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# --- CONFIGURAÇÕES ---
+# --- CONFIGURAÇÕES GERAIS ---
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
 RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
-RD_STAGE_ID = os.environ.get("RD_STAGE_ID", "").strip()
 
-# --- NOVO: CONFIGURAÇÕES DO GOOGLE DRIVE ---
+# --- MAPEAMENTO DE ETAPAS DO RD PARA SITUAÇÕES DO NOTION ---
+# CONFIRME SE ESTA LISTA DE ETAPAS ESTÁ COMPLETA
+RD_STAGES_MAP = {
+    "67ae261cab5a8e00178ea863": "Avaliando",
+    "67bcd1b67d60d4001b8c8aa2": "Condicionado",
+    "67ae261cab5a8e00178ea864": "Aprovado",
+    "67ae261cab5a8e00178ea865": "Com Reserva",
+}
+
+# --- NOVO: MAPEAMENTO COMPLETO DE CAMPOS PERSONALIZADOS DO RD PARA O NOTION ---
+# "ID do Campo no RD": {"notion_name": "Nome da Coluna no Notion", "notion_type": "tipo"}
+NOTION_RD_MAP = {
+    "67ea8afafddd15001447f639": {"notion_name": "ID (RD Station)", "notion_type": "text"},
+    "67b62f4fad0a4e0014841510": {"notion_name": "De onde é?", "notion_type": "text"},
+    "689cf258cece270014dbb4bc": {"notion_name": "Aluguel", "notion_type": "number"},
+    "67bdbe2a5062a6001945f18b": {"notion_name": "Por que deseja a casa?", "notion_type": "text"},
+    "67b31ac9fce8b4001e8dca11": {"notion_name": "Recebe Bolsa Família", "notion_type": "select"},
+    "67b0a3f6b436410018d97957": {"notion_name": "Profissão", "notion_type": "text"},
+    "67b31e93786c3f00143b07ce": {"notion_name": "Idade", "notion_type": "number"},
+    "67b321ba30fafb001c8f8743": {"notion_name": "Estado Civil", "notion_type": "text"},
+    "67b5d8552b873a001c9cca66": {"notion_name": "Dependente", "notion_type": "select"},
+    "67b31f37ca237d001e358c1b": {"notion_name": "+3 anos CLT", "notion_type": "select"},
+    "680cadbefcff56001b6be1a8": {"notion_name": "CPF (COOBRIGADO)", "notion_type": "text"},
+    "67c9dfefcbf7520014b42750": {"notion_name": "Faixa de Valor da Dívida", "notion_type": "select"},
+    "689b40f4249be2001b75ca0c": {"notion_name": "Gênero", "notion_type": "select"},
+    "689b4185efda16001986bcfb": {"notion_name": "Local de Trabalho", "notion_type": "text"},
+    "689ceff78b78010021d0c5c5": {"notion_name": "Prestação Máxima", "notion_type": "number"},
+    "689cf00a43244c00142f8783": {"notion_name": "Parcela Aprovada", "notion_type": "number"},
+    "689cf024a5042d0014cd3b3e": {"notion_name": "Entrada Aprovada", "notion_type": "text"},
+    "689cf0370f0eb500193694da": {"notion_name": "Saldo FGTS", "notion_type": "text"},
+    "689cf0578c1400001473b22e": {"notion_name": "Subsídio Real", "notion_type": "number"},
+    "689cf22fb742ff0014c8ba3b": {"notion_name": "OBS: entrada? FGTS? FGTS Futuro? Limite Cartão?", "notion_type": "text"},
+    # O campo "Aluguel" (689cf258cece270014dbb4bc) está duplicado na sua lista, mantive apenas um.
+}
+
+# Configurações do Google Drive
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
-# As credenciais são lidas da variável de ambiente como uma string JSON
 GDRIVE_CREDENTIALS_JSON = os.environ.get("GDRIVE_CREDENTIALS", "").strip()
-GDRIVE_TOKEN_JSON = os.environ.get("GDRIVE_TOKEN_JSON", "").strip() # <--- ESTA LINHA PROVAVELMENTE ESTÁ A FALTAR
-
+GDRIVE_TOKEN_JSON = os.environ.get("GDRIVE_TOKEN_JSON", "").strip()
 
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -27,258 +60,169 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-# --- MAPA FINAL E DEFINITIVO (BASEADO NA SUA TABELA) ---
-# ... (o seu mapeamento de colunas continua igual) ...
-NOTION_COLUMNS_MAP = {
-    # Coluna no Notion      # Fonte no RD Station                     # Tipo no Notion
-    'CPF (COMPRADOR)':  {'source': 'custom', 'id_rd': '67b0a46deba3040017bf2c62', 'type': 'text'},
-    'Renda':            {'source': 'custom', 'id_rd': '67b31ea6e1f61f0016ce701d', 'type': 'number'},
-    'CLT / AUT':        {'source': 'custom', 'id_rd': '67b3210c4ae59b00148582e9', 'type': 'multi_select'},
-    'Origem':           {'source': 'standard', 'path': ['deal', 'deal_source', 'name'], 'type': 'select'},
-    'Responsável':      {'source': 'standard', 'path': ['deal', 'user', 'name'], 'type': 'multi_select'},
-    'Data de Origem':   {'source': 'standard', 'path': ['deal', 'created_at'], 'type': 'date'},
-}
+# --- FUNÇÕES AUXILIARES ---
 
-# --- NOVO: FUNÇÃO DE UPLOAD PARA O GOOGLE DRIVE ---
-
-def upload_to_google_drive(filename):
-    """Faz o upload de um ficheiro para uma pasta específica no Google Drive."""
-    print(f"--- A iniciar o upload para o Google Drive: '{filename}' ---")
+def format_notion_property(value, notion_type):
+    """Formata um valor para o tipo de propriedade correto do Notion."""
+    if value is None or str(value).strip() == "":
+        return None
     try:
-        if not GDRIVE_CREDENTIALS_JSON or not GDRIVE_TOKEN_JSON: # Verifica o novo segredo
-            print("### ERRO: Credenciais ou token do Google Drive não encontrados...")
-            return
-        
-        # Carrega as credenciais a partir da string JSON
-        creds_info = json.loads(GDRIVE_CREDENTIALS_JSON)
-        token_info = json.loads(GDRIVE_TOKEN_JSON) # Usa o novo segredo
+        if notion_type == "text":
+            return {"rich_text": [{"text": {"content": str(value)}}]}
+        elif notion_type == "number":
+            # Limpa o valor para aceitar formatos como "R$ 1.234,56"
+            cleaned_value = re.sub(r'[^\d,.]', '', str(value))
+            numeric_value = float(cleaned_value.replace(",", "."))
+            return {"number": numeric_value}
+        elif notion_type == "select":
+            return {"select": {"name": str(value)}}
+        # Adicione outros tipos aqui se necessário (ex: multi_select, date)
+    except (ValueError, TypeError) as e:
+        print(f"  !! Aviso: Não foi possível formatar o valor '{value}' para o tipo '{notion_type}'. Erro: {e}")
+        return None
+    return None
 
-        # LINHA NOVA E CORRIGIDA
-        import google.oauth2.credentials
-        creds = google.oauth2.credentials.Credentials.from_authorized_user_info(token_info, scopes=["https://www.googleapis.com/auth/drive"])
-                
-        service = build('drive', 'v3', credentials=creds)
-        
-        file_metadata = {
-            'name': filename,
-            'parents': [GDRIVE_FOLDER_ID]
-        }
-        
-        media = MediaFileUpload(filename, mimetype='text/csv')
-        
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id'
-        ).execute()
-        
-        print(f"✔ Ficheiro carregado com sucesso para o Google Drive! ID do ficheiro: {file.get('id')}")
-
-    except Exception as e:
-        print(f"### ERRO AO FAZER UPLOAD PARA O GOOGLE DRIVE: {e} ###")
-        print("   Por favor, verifique se a pasta foi partilhada corretamente com o email da conta de serviço.")
-
-# --- FUNÇÃO DE BACKUP ATUALIZADA ---
-
-def extract_property_value(prop):
-    """Função auxiliar para extrair o valor de uma propriedade do Notion."""
-    prop_type = prop.get('type')
-    if not prop_type: return ""
+def build_properties_payload(lead_data, situacao):
+    """Constrói o dicionário de propriedades para a API do Notion."""
+    properties = {}
     
-    if prop_type in ['title', 'rich_text']:
-        return prop[prop_type][0]['text']['content'] if prop.get(prop_type) and prop[prop_type] else ""
-    elif prop_type == 'number':
-        return prop['number']
-    elif prop_type == 'select':
-        return prop['select']['name'] if prop.get('select') else ""
-    elif prop_type == 'multi_select':
-        return ", ".join([item['name'] for item in prop['multi_select']])
-    elif prop_type == 'date':
-        return prop['date']['start'] if prop.get('date') else ""
-    elif prop_type == 'phone_number':
-        return prop['phone_number']
-    return "N/A"
+    # 1. Campos Padrão e Obrigatórios
+    properties["Nome (Completar)"] = {"title": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]}
+    properties["ID do Lead no RD"] = {"rich_text": [{"text": {"content": lead_data["id"]}}]}
+    properties["Situação"] = {"select": {"name": situacao}}
+    
+    lead_phone = ""
+    if lead_data.get("contacts"):
+        phones = (lead_data["contacts"][0].get("phones") or [{}])
+        if phones: lead_phone = phones[0].get("phone")
+    properties["Telefone"] = {"phone_number": normalize_phone_number(lead_phone) if lead_phone else None}
 
-def backup_notion_database():
-    """Busca todos os dados da base do Notion, salva num CSV e faz o upload para o Google Drive."""
-    print("--- A iniciar o backup da base de dados do Notion ---")
+    # 2. Mapeamento de Campos Personalizados
+    custom_fields_dict = {field["custom_field"]["_id"]: field["value"] for field in lead_data.get("deal_custom_fields", [])}
+    
+    for rd_id, notion_info in NOTION_RD_MAP.items():
+        rd_value = custom_fields_dict.get(rd_id)
+        if rd_value is not None:
+            formatted_property = format_notion_property(rd_value, notion_info["notion_type"])
+            if formatted_property:
+                properties[notion_info["notion_name"]] = formatted_property
+                
+    return properties
+
+# --- FUNÇÕES DE SINCRONIZAÇÃO ---
+
+def get_existing_notion_leads():
+    """Busca todos os leads no Notion e retorna um dicionário mapeando ID do RD para ID da página do Notion."""
+    # ... (Esta função continua igual à versão anterior)
+    print("A buscar leads existentes no Notion para mapeamento...")
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-    all_pages = []
+    leads_map = {}
     has_more = True
     next_cursor = None
-
+    
     while has_more:
         payload = {}
-        if next_cursor:
-            payload['start_cursor'] = next_cursor
+        if next_cursor: payload['start_cursor'] = next_cursor
+        
+        response = requests.post(url, headers=NOTION_HEADERS, json=payload)
+        if response.status_code != 200:
+            print(f"### ERRO ao buscar leads do Notion: {response.text}")
+            return {}
             
-        try:
-            response = requests.post(url, headers=NOTION_HEADERS, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            all_pages.extend(data['results'])
-            has_more = data['has_more']
-            next_cursor = data['next_cursor']
-        except requests.exceptions.RequestException as e:
-            print(f"### ERRO AO BUSCAR DADOS DO NOTION PARA BACKUP: {e} ###")
-            return
-
-    if not all_pages:
-        print("A base de dados do Notion está vazia ou não foi possível aceder. Backup não gerado.")
-        return
-
-    processed_data = []
-    # MODIFICAÇÃO: Garante que todas as colunas sejam capturadas
-    all_headers = set()
-    temp_processed = []
-    for page in all_pages:
-        row = {}
-        for prop_name, prop_data in page['properties'].items():
-            row[prop_name] = extract_property_value(prop_data)
-            all_headers.add(prop_name)
-        temp_processed.append(row)
-
-    # Garante que todas as linhas tenham todas as colunas
-    header_list = sorted(list(all_headers))
-    for row in temp_processed:
-        processed_row = {header: row.get(header, "") for header in header_list}
-        processed_data.append(processed_row)
-        
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"backup_notion_{timestamp}.csv"
-    
-    try:
-        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=header_list, delimiter=';')
-            writer.writeheader()
-            writer.writerows(processed_data)
-        print(f"Ficheiro de backup temporário '{filename}' criado com sucesso.")
-        
-        # --- NOVO: Faz o upload do ficheiro ---
-        upload_to_google_drive(filename)
-        
-    except IOError as e:
-        print(f"### ERRO AO SALVAR O FICHEIRO DE BACKUP TEMPORÁRIO: {e} ###")
-    finally:
-        # Apaga o ficheiro local após o upload
-        if os.path.exists(filename):
-            os.remove(filename)
-            print(f"Ficheiro temporário '{filename}' apagado.")
-
-
-# --- FUNÇÕES EXISTENTES (sem alterações) ---
-# ... (create_lead_in_notion, get_value_from_path, etc. continuam aqui) ...
-def create_lead_in_notion(lead_data, normalized_phone, custom_fields_dict):
-    """Cria uma página no Notion seguindo o mapeamento exato fornecido."""
-    print(f"A criar o lead '{lead_data['name']}' com mapeamento definitivo no Notion...")
-    url = "https://api.notion.com/v1/pages"
-    
-    properties_payload = {
-        "Nome (Completar)": {"title": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]},
-        "Telefone": {"phone_number": normalized_phone if normalized_phone else None},
-    }
-
-    for notion_col_name, mapping in NOTION_COLUMNS_MAP.items():
-        field_value = None
-        source_type = mapping['source']
-
-        if source_type == 'custom':
-            field_value = custom_fields_dict.get(mapping['id_rd'])
-        elif source_type == 'standard':
-            field_value = get_value_from_path({'deal': lead_data}, mapping['path'])
-
-        if field_value:
-            notion_type = mapping['type']
-            print(f"  - Mapeando campo: '{notion_col_name}' com valor '{field_value}' (Tipo: {notion_type})")
+        data = response.json()
+        for page in data["results"]:
             try:
-                if notion_type == "text":
-                    properties_payload[notion_col_name] = {"rich_text": [{"text": {"content": str(field_value)}}]}
-                elif notion_type == "select":
-                    properties_payload[notion_col_name] = {"select": {"name": str(field_value)}}
-                elif notion_type == "multi_select":
-                    properties_payload[notion_col_name] = {"multi_select": [{"name": str(field_value)}]}
-                elif notion_type == "number":
-                    cleaned_value = re.sub(r'[^\d,.]', '', str(field_value))
-                    numeric_value = float(cleaned_value.replace(",", "."))
-                    properties_payload[notion_col_name] = {"number": numeric_value}
-                elif notion_type == "date":
-                    date_only = str(field_value).split('T')[0]
-                    properties_payload[notion_col_name] = {"date": {"start": date_only}}
-            except Exception as e:
-                print(f"  !! Aviso: Falha ao formatar o valor '{field_value}' para a coluna '{notion_col_name}'. Erro: {e}")
+                rd_id_property = page["properties"].get("ID do Lead no RD", {})
+                if rd_id_property and rd_id_property.get("rich_text"):
+                    rd_lead_id = rd_id_property["rich_text"][0]["text"]["content"]
+                    notion_page_id = page["id"]
+                    leads_map[rd_lead_id] = notion_page_id
+            except (IndexError, KeyError):
+                continue
+                
+        has_more = data['has_more']
+        next_cursor = data['next_cursor']
+        
+    print(f"Encontrados {len(leads_map)} leads com ID do RD no Notion.")
+    return leads_map
 
-    final_payload = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties_payload}
-    
-    response = requests.post(url, headers=NOTION_HEADERS, json=final_payload)
-    
-    if response.status_code == 200:
-        print(f"Lead '{lead_data['name']}' CRIADO COM SUCESSO NO NOTION!")
-    else:
-        print(f"### ERRO AO CRIAR LEAD NO NOTION ###")
-        print(f"Status Code: {response.status_code}")
-        print(f"Resposta do Notion: {response.text}")
-        print(f"####################################")
 
-def get_value_from_path(data_dict, path):
-    """Navega num dicionário aninhado para buscar um valor."""
-    for key in path:
-        data_dict = data_dict.get(key)
-        if data_dict is None: return None
-    return data_dict
+def update_lead_in_notion(notion_page_id, lead_data, situacao):
+    """ATUALIZADO: Atualiza TODOS os campos de um lead existente no Notion."""
+    print(f"  -> A ATUALIZAR lead no Notion (ID do RD: {lead_data['id']})")
+    url = f"https://api.notion.com/v1/pages/{notion_page_id}"
+    properties_payload = build_properties_payload(lead_data, situacao)
+    
+    payload = {"properties": properties_payload}
+    
+    response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+    if response.status_code != 200:
+        print(f"  ### ERRO ao atualizar lead no Notion: {response.text}")
+
+def create_lead_in_notion(lead_data, situacao):
+    """ATUALIZADO: Cria um novo lead no Notion com TODOS os campos mapeados."""
+    print(f"  -> A CRIAR novo lead no Notion: '{lead_data['name']}'")
+    url = "https://api.notion.com/v1/pages"
+    properties_payload = build_properties_payload(lead_data, situacao)
+    
+    payload = {
+        "parent": {"database_id": NOTION_DATABASE_ID},
+        "properties": properties_payload
+    }
+    
+    response = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    if response.status_code != 200:
+        print(f"  ### ERRO ao criar lead no Notion: {response.text}")
+
+def fetch_rd_station_leads_by_stage(stage_id):
+    """Busca as negociações de uma etapa específica no RD Station CRM."""
+    # ... (Esta função continua igual à versão anterior)
+    url = f"https://crm.rdstation.com/api/v1/deals?token={RD_CRM_TOKEN}&deal_stage_id={stage_id}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json().get("deals", [])
+    except requests.exceptions.RequestException as e:
+        print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}")
+        return []
 
 def normalize_phone_number(phone_str):
     if not phone_str: return ""
     return re.sub(r'\D', '', phone_str)
 
-def find_lead_by_phone(normalized_phone):
-    """Verifica se um lead com um telefone específico já existe para evitar duplicados."""
-    if not normalized_phone: return False
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-    payload = {"filter": {"property": "Telefone", "phone_number": {"equals": normalized_phone}}}
-    response = requests.post(url, headers=NOTION_HEADERS, json=payload)
-    return response.status_code == 200 and len(response.json()["results"]) > 0
 
-def fetch_rd_station_leads():
-    """Busca as negociações da etapa correta no RD Station CRM."""
-    url = f"https://crm.rdstation.com/api/v1/deals?token={RD_CRM_TOKEN}&deal_stage_id={RD_STAGE_ID}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json().get("deals", [])
-    except requests.exceptions.RequestException:
-        print(f"Erro ao buscar negociações no RD Station.")
-        return []
-
-# --- FLUXO PRINCIPAL ---
+# --- FLUXO PRINCIPAL DE SINCRONIZAÇÃO ---
 if __name__ == "__main__":
-    # A função de backup agora salva o CSV e faz o upload para o Drive
-    backup_notion_database()
+    print("\n--- A INICIAR SCRIPT DE SINCRONIZAÇÃO RD -> NOTION (VERSÃO REFINADA) ---")
     
-    print("\n--- A iniciar o script de sincronização ---")
-    rd_leads = fetch_rd_station_leads()
-    print(f"Encontradas {len(rd_leads)} negociações na etapa de avaliação.")
+    # 1. Pega o estado atual do Notion
+    existing_leads_map = get_existing_notion_leads()
     
-    for lead in rd_leads:
-        lead_name = lead.get('name', 'Nome Desconhecido')
-        print(f"\nA processar negociação: {lead_name}")
+    # 2. Itera sobre cada etapa do RD mapeada
+    for stage_id, notion_situacao in RD_STAGES_MAP.items():
+        print(f"\nA processar etapa do RD: {stage_id} (Situação no Notion: '{notion_situacao}')")
+        rd_leads_in_stage = fetch_rd_station_leads_by_stage(stage_id)
         
-        custom_fields_dict = {field.get("custom_field", {}).get("_id"): field.get("value") for field in lead.get("deal_custom_fields", [])}
-        
-        lead_phone = ""
-        if lead.get("contacts"):
-            lead_phone = (lead["contacts"][0].get("phones") or [{}])[0].get("phone")
-        if not lead_phone:
-            lead_phone = custom_fields_dict.get("67ea8afafddd15001447f639")
-
-        normalized_phone = normalize_phone_number(lead_phone)
-        
-        if not normalized_phone:
-            print(f"A negociação '{lead_name}' não tem telefone para identificação. A ignorar.")
+        if not rd_leads_in_stage:
+            print("Nenhum lead encontrado nesta etapa.")
             continue
+
+        print(f"Encontrados {len(rd_leads_in_stage)} leads.")
         
-        if not find_lead_by_phone(normalized_phone):
-            create_lead_in_notion(lead, normalized_phone, custom_fields_dict)
-        else:
-            print(f"Lead com telefone {normalized_phone} já existe no Notion. A ignorar.")
-    
-    print("\n--- Script de sincronização finalizado ---")
+        # 3. Sincroniza cada lead da etapa atual
+        for lead in rd_leads_in_stage:
+            rd_lead_id = lead["id"]
+            
+            # --- NOVO: IMPRIME OS DADOS BRUTOS DO LEAD PARA DEPURAÇÃO ---
+            print(f"\n--- A processar Lead: {lead.get('name')} (ID RD: {rd_lead_id}) ---")
+            # A linha abaixo imprime todos os campos do lead. Útil para depuração.
+            # print(json.dumps(lead, indent=2))
+
+            # Verifica se o lead já existe no nosso mapa do Notion
+            if rd_lead_id in existing_leads_map:
+                notion_page_id = existing_leads_map[rd_lead_id]
+                update_lead_in_notion(notion_page_id, lead, notion_situacao)
+            else:
+                create_lead_in_notion(lead, notion_situacao)
+
+    print("\n--- SCRIPT DE SINCRONIZAÇÃO FINALIZADO ---")
