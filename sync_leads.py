@@ -230,9 +230,35 @@ def fetch_rd_station_leads_by_stage(stage_id):
         print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}"); return []
 
 def normalize_phone_number(phone_str):
-    if not phone_str: return ""
+    """
+    Normaliza o número de telefone para o padrão DDD + 8 dígitos finais,
+    resolvendo o problema do 9º dígito e códigos de país.
+    """
+    if not phone_str:
+        return ""
+    
+    # 1. Remove todos os caracteres não numéricos
     only_digits = re.sub(r'\D', '', str(phone_str))
-    if len(only_digits) >= 8: return only_digits[-8:]
+    
+    # 2. Remove o código de país '55' se ele existir no início e o número for longo
+    if only_digits.startswith('55') and len(only_digits) > 11:
+        only_digits = only_digits[2:]
+        
+    # 3. Trata o nono dígito
+    # Se o número tiver 11 dígitos (DDD + 9 + Número), removemos o primeiro 9 do número
+    if len(only_digits) == 11:
+        ddd = only_digits[:2]
+        numero = only_digits[2:]
+        if numero.startswith('9'):
+            return ddd + numero[1:]
+        else:
+            return only_digits # Retorna o número se não for um celular padrão
+            
+    # Se o número tiver 10 dígitos (DDD + 8 + Número), já está no formato que queremos
+    elif len(only_digits) == 10:
+        return only_digits
+        
+    # Para outros formatos, retorna apenas os dígitos para uma tentativa de correspondência
     return only_digits
 
 def update_lead_in_notion(page_info, lead_data, situacao):
