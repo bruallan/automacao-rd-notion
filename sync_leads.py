@@ -15,9 +15,9 @@ NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
 RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 
-# --- CONFIGURAÇÕES DO WHATSAPP ---
+# --- CONFIGURAÇÕES DO WHATSAPP (ATUALIZADO) ---
 BOTCONVERSA_API_KEY = os.environ.get("BOTCONVERSA_API_KEY", "").strip()
-WHATSAPP_RECIPIENT_NUMBER = os.environ.get("WHATSAPP_RECIPIENT_NUMBER", "").strip()
+BOTCONVERSA_SUBSCRIBER_ID = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip() # NOVO SEGREDO
 BOTCONVERSA_BASE_URL = "https://backend.botconversa.com.br" 
 
 # --- CONFIGURAÇÕES DO GOOGLE DRIVE ---
@@ -113,54 +113,21 @@ def backup_notion_database():
             os.remove(filename)
             print(f"Ficheiro temporário '{filename}' apagado.")
 
-# --- FUNÇÕES DE WHATSAPP (REESCRITAS COM A LÓGICA VALIDADA) ---
-
-def get_subscriber_id(phone_number):
-    """Busca o ID de um subscritor no BotConversa pelo número de telefone, usando o endpoint da documentação."""
-    print(f"   - A procurar o ID do subscritor para o número: {phone_number}")
-    
-    # Endpoint correto para buscar um subscritor, conforme a sua documentação
-    url = f"{BOTCONVERSA_BASE_URL}/subscriber/get_by_phone/{phone_number}/"
-    headers = {"API-KEY": BOTCONVERSA_API_KEY}
-    
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data and data.get("id"):
-            subscriber_id = data["id"]
-            print(f"   - ID do subscritor encontrado: {subscriber_id}")
-            return subscriber_id
-        else:
-            print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa.")
-            return None
-    except requests.exceptions.RequestException as e:
-        # A API retorna 404 se não encontrar, tratamos isso como "não encontrado" em vez de um erro.
-        if e.response.status_code == 404:
-            print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa (erro 404).")
-        else:
-            print(f"### ERRO ao buscar ID do subscritor no BotConversa: {e}")
-        return None
+# --- FUNÇÃO DE WHATSAPP (SIMPLIFICADA) ---
 
 def send_whatsapp_message(message):
-    """Encontra o ID do subscritor e envia a mensagem para o WhatsApp."""
-    if not BOTCONVERSA_API_KEY or not WHATSAPP_RECIPIENT_NUMBER:
-        print("!! Aviso: API Key ou número do destinatário não configurados. Mensagem não enviada.")
+    """Envia a mensagem para o WhatsApp usando um ID de subscritor fixo."""
+    if not BOTCONVERSA_API_KEY or not BOTCONVERSA_SUBSCRIBER_ID:
+        print("!! Aviso: API Key ou ID do Subscritor do BotConversa não configurados. Mensagem não enviada.")
         return
 
-    subscriber_id = get_subscriber_id(WHATSAPP_RECIPIENT_NUMBER)
-    if not subscriber_id:
-        print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
-        return
-
-    # Usando o endpoint de envio validado
-    url = f"{BOTCONVERSA_BASE_URL}/subscriber/{subscriber_id}/send_message/"
+    # Usando o endpoint de envio validado com o ID fixo
+    url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{BOTCONVERSA_SUBSCRIBER_ID}/send_message/"
     headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
     payload = {"type": "text", "value": message}
     
     try:
-        print(f"   -> A enviar mensagem para o subscritor ID: {subscriber_id}")
+        print(f"   -> A enviar mensagem para o subscritor ID: {BOTCONVERSA_SUBSCRIBER_ID}")
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         response.raise_for_status()
         print("   - Mensagem de resumo enviada com sucesso para o WhatsApp.")
