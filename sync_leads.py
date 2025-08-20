@@ -301,11 +301,14 @@ def update_lead_in_notion(notion_page_data, lead_data, situacao):
     print(f"  -> A ATUALIZAR lead no Notion: '{lead_name}'")
     
     url = f"https://api.notion.com/v1/pages/{notion_page_id}"
+    
+    # Constrói o payload apenas com os campos que têm valor no RD Station
     new_properties_payload = build_properties_payload(lead_data, situacao)
     old_properties = notion_page_data["properties"]
     
+    # --- LÓGICA DE NOTIFICAÇÃO CORRIGIDA ---
+    # Compara apenas os campos que realmente estão a ser enviados
     changes_list = []
-    # Itera sobre as novas propriedades que queremos enviar
     for prop_name, new_prop_obj in new_properties_payload.items():
         if prop_name == "Status": continue
         
@@ -313,15 +316,20 @@ def update_lead_in_notion(notion_page_data, lead_data, situacao):
         old_value = _get_simple_value_from_prop(old_prop_obj)
         new_value = _get_simple_value_from_prop(new_prop_obj)
 
+        # Compara os valores e adiciona à lista de alterações se forem diferentes
         if str(old_value) != str(new_value):
             changes_list.append(f"- *{prop_name}:* de '{old_value or 'vazio'}' para '{new_value}'")
 
+    # Lógica de exceção para o Status
     current_status = _get_simple_value_from_prop(old_properties.get("Status"))
     status_divergence = current_status and current_status != situacao
 
+    # Se houver divergência de status, envia um alerta específico
     if status_divergence:
         print(f"  !! Aviso: Status no Notion ('{current_status}') é diferente do esperado ('{situacao}'). O Status não será alterado.")
-        del new_properties_payload["Status"]
+        # Remove o Status do payload para não o sobrescrever
+        if "Status" in new_properties_payload:
+            del new_properties_payload["Status"]
         
         alert_message = (
             f"⚠️ *Alerta de Sincronização*\n\n"
@@ -333,10 +341,21 @@ def update_lead_in_notion(notion_page_data, lead_data, situacao):
             alert_message += "\n*Outras Alterações Realizadas:*\n" + "\n".join(changes_list)
         send_whatsapp_message(alert_message)
     
-    # Só envia a atualização se houver alguma alteração real a ser feita
-    if new_properties_payload.keys() - old_properties.keys() or changes_list or (not status_divergence and current_status != situacao):
-        payload = {"properties": new_properties_payload}
+    # Determina se há de facto algo para atualizar
+    payload_sem_status = {k: v for k, v in new_properties_payload.items() if k != "Status"}
+    deve_atualizar_status = not status_divergence and current_status != situacao
+    
+    # Envia a atualização para o Notion apenas se houver alguma alteração real a ser feita
+    if changes_list or deve_atualizar_status:
+        # Se não houver divergência, o Status normal faz parte do payload
+        if deve_atualizar_status:
+            payload_final = new_properties_payload
+        else: # Se houver divergência, usamos o payload sem o Status
+            payload_final = payload_sem_status
+            
+        payload = {"properties": payload_final}
         response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+        
         if response.status_code == 200:
             return f"- Lead atualizado: *{lead_name}*\n  ({len(changes_list)} campos alterados)"
         else:
@@ -392,7 +411,7 @@ if __name__ == "__main__":
                 if summary: updated_leads_summary.append(summary)
             else:
                 # LINHA NOVA E CORRETA
-                summary = create_lead_in_notion(lead, situacao)
+                summary = create_lead_in_notion(lead, notion_situacao))
                 if summary: created_leads_summary.append(summary)
     
     print("\n--- A preparar o relatório final da sincronização ---")
