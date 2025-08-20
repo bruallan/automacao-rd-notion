@@ -115,40 +115,30 @@ def backup_notion_database():
 
 # --- FUNÇÕES DE WHATSAPP (REESCRITAS COM A LÓGICA VALIDADA) ---
 
-def _get_botconversa_phone_map():
-    """
-    Busca todos os subscritores do BotConversa e cria um mapa de 'telefone -> id'.
-    Esta lógica é uma adaptação da sua função `processar_contatos_botconversa`.
-    """
-    print("   - A buscar e mapear contatos do BotConversa...")
-    mapa_telefone_id = {}
-    url = f"{BOTCONVERSA_BASE_URL}/webhook/subscribers/"
+def get_subscriber_id(phone_number):
+    """Busca o ID de um subscritor no BotConversa pelo número de telefone, usando o endpoint correto."""
+    print(f"   - A procurar o ID do subscritor para o número: {phone_number}")
+    
+    # Endpoint correto para buscar um subscritor pelo telefone, conforme a sua documentação
+    url = f"{BOTCONVERSA_BASE_URL}/api/v1/subscriber/?phone={phone_number}"
     headers = {"API-KEY": BOTCONVERSA_API_KEY}
     
-    pagina = 1
-    while url:
-        try:
-            print(f"   -> Lendo página {pagina} de contatos...")
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            dados = response.json()
-
-            for inscrito in dados.get('results', []):
-                telefone_normalizado = re.sub(r'\D', '', str(inscrito.get('phone')))
-                subscriber_id = inscrito.get('id')
-                if telefone_normalizado and subscriber_id:
-                    mapa_telefone_id[telefone_normalizado] = subscriber_id
-            
-            url = dados.get('next')
-            pagina += 1
-            time.sleep(1)
-
-        except requests.exceptions.RequestException as e:
-            print(f"   -> FALHA ao processar contatos do BotConversa: {e}")
-            return None # Retorna None em caso de falha
-
-    print(f"   - Mapeamento concluído. {len(mapa_telefone_id)} contatos carregados.")
-    return mapa_telefone_id
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        
+        # A API retorna uma lista, mesmo que encontre apenas um. Pegamos o primeiro resultado.
+        if data and len(data) > 0 and data[0].get("id"):
+            subscriber_id = data[0]["id"]
+            print(f"   - ID do subscritor encontrado: {subscriber_id}")
+            return subscriber_id
+        else:
+            print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa.")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"### ERRO ao buscar ID do subscritor no BotConversa: {e}")
+        return None
 
 def send_whatsapp_message(message):
     """Encontra o ID do subscritor e envia a mensagem para o WhatsApp."""
@@ -156,17 +146,12 @@ def send_whatsapp_message(message):
         print("!! Aviso: API Key ou número do destinatário não configurados. Mensagem não enviada.")
         return
 
-    mapa_telefone_id = _get_botconversa_phone_map()
-    if mapa_telefone_id is None:
-        print("   -> Envio de mensagem cancelado devido a uma falha ao buscar contatos.")
-        return
-
-    subscriber_id = mapa_telefone_id.get(WHATSAPP_RECIPIENT_NUMBER)
+    subscriber_id = get_subscriber_id(WHATSAPP_RECIPIENT_NUMBER)
     if not subscriber_id:
-        print(f"   -> ERRO: O seu número {WHATSAPP_RECIPIENT_NUMBER} não foi encontrado na lista de subscritores do BotConversa.")
+        print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
         return
 
-    # Usando o endpoint e o payload validados pelo seu script
+    # Usando o endpoint de envio validado
     url = f"{BOTCONVERSA_BASE_URL}/webhook/subscriber/{subscriber_id}/send_message/"
     headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
     payload = {"type": "text", "value": message}
@@ -178,7 +163,6 @@ def send_whatsapp_message(message):
         print("   - Mensagem de resumo enviada com sucesso para o WhatsApp.")
     except requests.exceptions.RequestException as e:
         print(f"   ### ERRO ao enviar mensagem para o WhatsApp: {e}")
-
 
 # --- FUNÇÕES DE SINCRONIZAÇÃO (RESTANTES) ---
 # (Não foram alteradas)
