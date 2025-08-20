@@ -187,11 +187,27 @@ def build_properties_payload(lead_data, situacao):
                 properties[notion_info["notion_name"]] = formatted_property
     return properties
 
+def _get_simple_value_from_prop(prop_object):
+    """Função auxiliar para extrair um valor simples de um objeto de propriedade do Notion."""
+    if not prop_object: return None
+    prop_type = prop_object.get('type')
+    if prop_type in ['title', 'rich_text']:
+        return prop_object[prop_type][0]['text']['content'] if prop_object.get(prop_type) and prop_object[prop_type] else None
+    elif prop_type == 'number': return prop_object.get('number')
+    elif prop_type == 'select': return prop_object.get('select', {}).get('name')
+    elif prop_type == 'multi_select':
+        items = prop_object.get('multi_select', [])
+        return items[0]['name'] if items else None
+    elif prop_type == 'phone_number': return prop_object.get('phone_number')
+    return None
+
 def get_existing_notion_leads():
+    """ATUALIZADO: Busca leads e armazena todas as suas propriedades para comparação futura."""
     print("A buscar leads existentes no Notion para mapeamento...")
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     rd_id_map, phone_map = {}, {}
     has_more, next_cursor = True, None
+    
     while has_more:
         payload = {}
         if next_cursor: payload['start_cursor'] = next_cursor
@@ -199,24 +215,22 @@ def get_existing_notion_leads():
         if response.status_code != 200:
             print(f"### ERRO ao buscar leads do Notion: {response.text}"); return {}, {}
         data = response.json()
+        
         for page in data["results"]:
-            page_id, props = page["id"], page["properties"]
-            current_status_list = props.get("Status", {}).get("multi_select", [])
-            current_status = current_status_list[0]["name"] if current_status_list else None
-            try:
-                rd_id_prop = props.get("ID (RD Station)", {})
-                id_field_list = rd_id_prop.get("rich_text")
-                if id_field_list and id_field_list[0].get("text", {}).get("content"):
-                    rd_id = id_field_list[0]["text"]["content"]
-                    if rd_id: rd_id_map[rd_id] = {"page_id": page_id, "status": current_status}
-            except (IndexError, KeyError): pass
-            try:
-                phone_prop = props.get("Telefone", {})
-                if phone_prop.get("phone_number"):
-                    phone = normalize_phone_number(phone_prop["phone_number"])
-                    if phone: phone_map[phone] = {"page_id": page_id, "status": current_status}
-            except (IndexError, KeyError): pass
+            props = page["properties"]
+            
+            # Mapeia por ID do RD
+            rd_id_prop = props.get("ID (RD Station)")
+            rd_id = _get_simple_value_from_prop(rd_id_prop)
+            if rd_id: rd_id_map[rd_id] = page # Armazena o objeto da página inteira
+
+            # Mapeia por Telefone
+            phone_prop = props.get("Telefone")
+            phone = normalize_phone_number(_get_simple_value_from_prop(phone_prop))
+            if phone: phone_map[phone] = page # Armazena o objeto da página inteira
+                
         has_more, next_cursor = data['has_more'], data['next_cursor']
+        
     print(f"Encontrados {len(rd_id_map)} leads com ID do RD e {len(phone_map)} leads com telefone no Notion.")
     return rd_id_map, phone_map
 
@@ -264,24 +278,57 @@ def normalize_phone_number(phone_str):
     # Para outros formatos (ex: números curtos), retorna o que for possível
     return only_digits
 
-def update_lead_in_notion(page_info, lead_data, situacao):
-    rd_lead_id = lead_data["id"]
+def update_lead_in_notion(notion_page_data, lead_data, situacao):
+    """ATUALIZADO: Compara campos e detalha as alterações no alerta do WhatsApp."""
     lead_name = lead_data.get("name", "Nome Desconhecido")
-    print(f"  -> A ATUALIZAR lead no Notion: '{lead_name}' (ID do RD: {rd_lead_id})")
-    url = f"https://api.notion.com/v1/pages/{page_info['page_id']}"
-    properties_payload = build_properties_payload(lead_data, situacao)
-    current_status = page_info.get("status")
-    if current_status and current_status != situacao:
+    notion_page_id = notion_page_data["id"]
+    print(f"  -> A ATUALIZAR lead no Notion: '{lead_name}'")
+    
+    url = f"https://api.notion.com/v1/pages/{notion_page_id}"
+    new_properties = build_properties_payload(lead_data, situacao)
+    old_properties = notion_page_data["properties"]
+    
+    # Compara campos e gera a lista de alterações
+    changes_list = []
+    for prop_name, new_prop_obj in new_properties.items():
+        if prop_name == "Status": continue # O Status é tratado separadamente
+        
+        old_prop_obj = old_properties.get(prop_name)
+        old_value = _get_simple_value_from_prop(old_prop_obj)
+        new_value = _get_simple_value_from_prop(new_prop_obj)
+
+        if str(old_value) != str(new_value):
+            changes_list.append(f"- Campo '{prop_name}' alterado de '{old_value or 'vazio'}' para '{new_value}'")
+
+    # Lógica de exceção para o Status
+    current_status = _get_simple_value_from_prop(old_properties.get("Status"))
+    status_divergence = current_status and current_status != situacao
+
+    if status_divergence:
         print(f"  !! Aviso: Status no Notion ('{current_status}') é diferente do esperado ('{situacao}'). O Status não será alterado.")
-        del properties_payload["Status"]
-        whatsapp_alert = (f"⚠️ *Alerta de Sincronização*\n\nO lead *{lead_name}* foi atualizado, mas o status não foi alterado.\n\n- *Status no Notion:* {current_status}\n- *Etapa no RD Station deveria ser:* {situacao}\n\nPor favor, verifique se a divergência é intencional.")
-        send_whatsapp_message(whatsapp_alert)
-    payload = {"properties": properties_payload}
-    response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
-    if response.status_code == 200:
-        return f"- Lead atualizado: *{lead_name}*\n  (ID do RD: {rd_lead_id})"
+        del new_properties["Status"]
+        
+        alert_message = (
+            f"⚠️ *Alerta de Sincronização*\n\n"
+            f"O lead *{lead_name}* teve uma divergência de status e foi atualizado com as seguintes alterações:\n\n"
+            f"*- Status no Notion:* {current_status}\n"
+            f"*- Etapa no RD Station (esperado):* {situacao}\n"
+        )
+        if changes_list:
+            alert_message += "\n*Outras Alterações Realizadas:*\n" + "\n".join(changes_list)
+        send_whatsapp_message(alert_message)
+    
+    # Envia a atualização para o Notion se houver alguma alteração
+    if changes_list or (not status_divergence and current_status != situacao):
+        payload = {"properties": new_properties}
+        response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+        if response.status_code == 200:
+            return f"- Lead atualizado: *{lead_name}*\n  ({len(changes_list)} campos alterados)"
+        else:
+            print(f"  ### ERRO ao atualizar lead no Notion: {response.text}"); return None
     else:
-        print(f"  ### ERRO ao atualizar lead no Notion: {response.text}"); return None
+        print("  -> Nenhuma alteração detetada para este lead.")
+        return None
 
 def create_lead_in_notion(lead_data, situacao):
     lead_name = lead_data.get("name", "Negociação sem nome")
@@ -321,12 +368,13 @@ if __name__ == "__main__":
             
             print(f"\n--- A processar Lead: {lead_name} (ID RD: {rd_lead_id}) ---")
             
-            page_info = rd_id_map.get(rd_lead_id)
-            if not page_info and normalized_phone:
-                page_info = phone_map.get(normalized_phone)
+            # A lógica de busca agora retorna o objeto da página inteira
+            page_data = rd_id_map.get(rd_lead_id)
+            if not page_data and normalized_phone:
+                page_data = phone_map.get(normalized_phone)
             
-            if page_info:
-                summary = update_lead_in_notion(page_info, lead, notion_situacao)
+            if page_data:
+                summary = update_lead_in_notion(page_data, lead, notion_situacao)
                 if summary: updated_leads_summary.append(summary)
             else:
                 summary = create_lead_in_notion(lead, notion_situacao)
