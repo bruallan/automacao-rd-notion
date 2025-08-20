@@ -15,9 +15,9 @@ NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
 RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 
-# --- CONFIGURAÇÕES DO WHATSAPP (ATUALIZADO) ---
+# --- CONFIGURAÇÕES DO WHATSAPP ---
 BOTCONVERSA_API_KEY = os.environ.get("BOTCONVERSA_API_KEY", "").strip()
-BOTCONVERSA_SUBSCRIBER_ID = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip() # NOVO SEGREDO
+BOTCONVERSA_SUBSCRIBER_ID = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip()
 BOTCONVERSA_BASE_URL = "https://backend.botconversa.com.br" 
 
 # --- CONFIGURAÇÕES DO GOOGLE DRIVE ---
@@ -32,6 +32,30 @@ RD_STAGES_MAP = {
     "67ae261cab5a8e00178ea864": "Aprovado",
     "67ae261cab5a8e00178ea865": "Com Reserva",
 }
+
+NOTION_RD_MAP = {
+    "67ea8afafddd15001447f639": {"notion_name": "ID (RD Station)", "notion_type": "text"},
+    "67b62f4fad0a4e0014841510": {"notion_name": "De onde é?", "notion_type": "text"},
+    "689cf258cece270014dbb4bc": {"notion_name": "Aluguel", "notion_type": "number"},
+    "67bdbe2a5062a6001945f18b": {"notion_name": "Por que deseja a casa?", "notion_type": "text"},
+    "67b31ac9fce8b4001e8dca11": {"notion_name": "Recebe Bolsa Família?", "notion_type": "select"},
+    "67b0a3f6b436410018d97957": {"notion_name": "Profissão", "notion_type": "text"},
+    "67b31e93786c3f00143b07ce": {"notion_name": "Idade", "notion_type": "number"},
+    "67b321ba30fafb001c8f8743": {"notion_name": "Estado Civil", "notion_type": "text"},
+    "67b5d8552b873a001c9cca66": {"notion_name": "Dependente", "notion_type": "select"},
+    "67b31f37ca237d001e358c1b": {"notion_name": "+3 anos CLT", "notion_type": "select"},
+    "680cadbefcff56001b6be1a8": {"notion_name": "CPF (COOBRIGADO)", "notion_type": "text"},
+    "67c9dfefcbf7520014b42750": {"notion_name": "Faixa de Valor da Dívida", "notion_type": "select"},
+    "689b40f4249be2001b75ca0c": {"notion_name": "Gênero", "notion_type": "select"},
+    "689b4185efda16001986bcfb": {"notion_name": "Local de Trabalho", "notion_type": "text"},
+    "689ceff78b78010021d0c5c5": {"notion_name": "Prestação Máxima", "notion_type": "number"},
+    "689cf00a43244c00142f8783": {"notion_name": "Parcela Aprovada", "notion_type": "number"},
+    "689cf024a5042d0014cd3b3e": {"notion_name": "Entrada Aprovada", "notion_type": "text"},
+    "689cf0370f0eb500193694da": {"notion_name": "Saldo FGTS", "notion_type": "text"},
+    "689cf0578c1400001473b22e": {"notion_name": "Subsídio Real", "notion_type": "number"},
+    "689cf22fb742ff0014c8ba3b": {"notion_name": "OBS: entrada? FGTS? FGTS Futuro? Limite Cartão?", "notion_type": "text"},
+}
+
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
@@ -39,7 +63,6 @@ NOTION_HEADERS = {
 }
 
 # --- FUNÇÕES DE BACKUP E UPLOAD ---
-# (Estas funções não foram alteradas)
 def upload_to_google_drive(filename):
     print(f"--- A iniciar o upload do backup para o Google Drive: '{filename}' ---")
     try:
@@ -113,19 +136,14 @@ def backup_notion_database():
             os.remove(filename)
             print(f"Ficheiro temporário '{filename}' apagado.")
 
-# --- FUNÇÃO DE WHATSAPP (SIMPLIFICADA) ---
-
+# --- FUNÇÕES DE WHATSAPP ---
 def send_whatsapp_message(message):
-    """Envia a mensagem para o WhatsApp usando um ID de subscritor fixo."""
     if not BOTCONVERSA_API_KEY or not BOTCONVERSA_SUBSCRIBER_ID:
         print("!! Aviso: API Key ou ID do Subscritor do BotConversa não configurados. Mensagem não enviada.")
         return
-
-    # Usando o endpoint de envio validado com o ID fixo
     url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{BOTCONVERSA_SUBSCRIBER_ID}/send_message/"
     headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
     payload = {"type": "text", "value": message}
-    
     try:
         print(f"   -> A enviar mensagem para o subscritor ID: {BOTCONVERSA_SUBSCRIBER_ID}")
         response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -134,9 +152,41 @@ def send_whatsapp_message(message):
     except requests.exceptions.RequestException as e:
         print(f"   ### ERRO ao enviar mensagem para o WhatsApp: {e}")
 
+# --- FUNÇÕES AUXILIARES E DE SINCRONIZAÇÃO ---
+def format_notion_property(value, notion_type):
+    if value is None or str(value).strip() == "": return None
+    try:
+        if notion_type == "text": return {"rich_text": [{"text": {"content": str(value)}}]}
+        elif notion_type == "number":
+            s_value = str(value).replace("R$", "").strip().replace(".", "").replace(",", ".")
+            cleaned_value = re.sub(r'[^\d.]', '', s_value)
+            if cleaned_value: return {"number": float(cleaned_value)}
+        elif notion_type == "select": return {"select": {"name": str(value)}}
+    except (ValueError, TypeError) as e:
+        print(f"  !! Aviso: Não foi possível formatar o valor '{value}' para o tipo '{notion_type}'. Erro: {e}")
+        return None
+    return None
 
-# --- FUNÇÕES DE SINCRONIZAÇÃO (RESTANTES) ---
-# (Não foram alteradas)
+def build_properties_payload(lead_data, situacao):
+    properties = {}
+    properties["Nome (Completar)"] = {"title": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]}
+    properties["ID (RD Station)"] = {"rich_text": [{"text": {"content": lead_data["id"]}}]}
+    properties["Status"] = {"multi_select": [{"name": situacao}]}
+    lead_phone = ""
+    if lead_data.get("contacts"):
+        phones = (lead_data["contacts"][0].get("phones") or [{}])
+        if phones: lead_phone = phones[0].get("phone")
+    properties["Telefone"] = {"phone_number": normalize_phone_number(lead_phone) if lead_phone else None}
+    custom_fields_dict = {field["custom_field"]["_id"]: field["value"] for field in lead_data.get("deal_custom_fields", [])}
+    for rd_id, notion_info in NOTION_RD_MAP.items():
+        rd_value = custom_fields_dict.get(rd_id)
+        if rd_value is not None:
+            if notion_info["notion_name"] == "ID (RD Station)": continue
+            formatted_property = format_notion_property(rd_value, notion_info["notion_type"])
+            if formatted_property:
+                properties[notion_info["notion_name"]] = formatted_property
+    return properties
+
 def get_existing_notion_leads():
     print("A buscar leads existentes no Notion para mapeamento...")
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
@@ -156,14 +206,14 @@ def get_existing_notion_leads():
             try:
                 rd_id_prop = props.get("ID (RD Station)", {})
                 id_field_list = rd_id_prop.get("rich_text")
-                if id_field_list:
+                if id_field_list and id_field_list[0].get("text", {}).get("content"):
                     rd_id = id_field_list[0]["text"]["content"]
                     if rd_id: rd_id_map[rd_id] = {"page_id": page_id, "status": current_status}
             except (IndexError, KeyError): pass
             try:
                 phone_prop = props.get("Telefone", {})
                 if phone_prop.get("phone_number"):
-                    phone = re.sub(r'\D', '', str(phone_prop["phone_number"]))
+                    phone = normalize_phone_number(phone_prop["phone_number"])
                     if phone: phone_map[phone] = {"page_id": page_id, "status": current_status}
             except (IndexError, KeyError): pass
         has_more, next_cursor = data['has_more'], data['next_cursor']
@@ -179,46 +229,93 @@ def fetch_rd_station_leads_by_stage(stage_id):
     except requests.exceptions.RequestException as e:
         print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}"); return []
 
-# --- FLUXO PRINCIPAL (MODO DE SIMULAÇÃO) ---
+def normalize_phone_number(phone_str):
+    if not phone_str: return ""
+    only_digits = re.sub(r'\D', '', str(phone_str))
+    if len(only_digits) >= 8: return only_digits[-8:]
+    return only_digits
+
+def update_lead_in_notion(page_info, lead_data, situacao):
+    rd_lead_id = lead_data["id"]
+    lead_name = lead_data.get("name", "Nome Desconhecido")
+    print(f"  -> A ATUALIZAR lead no Notion: '{lead_name}' (ID do RD: {rd_lead_id})")
+    url = f"https://api.notion.com/v1/pages/{page_info['page_id']}"
+    properties_payload = build_properties_payload(lead_data, situacao)
+    current_status = page_info.get("status")
+    if current_status and current_status != situacao:
+        print(f"  !! Aviso: Status no Notion ('{current_status}') é diferente do esperado ('{situacao}'). O Status não será alterado.")
+        del properties_payload["Status"]
+        whatsapp_alert = (f"⚠️ *Alerta de Sincronização*\n\nO lead *{lead_name}* foi atualizado, mas o status não foi alterado.\n\n- *Status no Notion:* {current_status}\n- *Etapa no RD Station deveria ser:* {situacao}\n\nPor favor, verifique se a divergência é intencional.")
+        send_whatsapp_message(whatsapp_alert)
+    payload = {"properties": properties_payload}
+    response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+    if response.status_code == 200:
+        return f"- Lead atualizado: *{lead_name}*\n  (ID do RD: {rd_lead_id})"
+    else:
+        print(f"  ### ERRO ao atualizar lead no Notion: {response.text}"); return None
+
+def create_lead_in_notion(lead_data, situacao):
+    lead_name = lead_data.get("name", "Negociação sem nome")
+    print(f"  -> A CRIAR novo lead no Notion: '{lead_name}'")
+    url = "https://api.notion.com/v1/pages"
+    properties_payload = build_properties_payload(lead_data, situacao)
+    payload = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties_payload}
+    response = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    if response.status_code == 200:
+        lead_phone = properties_payload.get("Telefone", {}).get("phone_number", "N/A")
+        return (f"*Lead Adicionado*\n- *Nome:* {lead_name}\n- *Telefone:* {lead_phone}\n- *Status:* {situacao}")
+    else:
+        print(f"  ### ERRO ao criar lead no Notion: {response.text}")
+        return None
+
+# --- FLUXO PRINCIPAL (MODO DE PRODUÇÃO) ---
 if __name__ == "__main__":
     
     backup_notion_database()
 
-    print("\n--- A INICIAR SIMULAÇÃO DE SINCRONIZAÇÃO (nenhuma alteração será feita no Notion) ---")
-    leads_a_criar, leads_a_atualizar = [], []
+    print("\n--- A INICIAR SINCRONIZAÇÃO RD -> NOTION (MODO DE PRODUÇÃO) ---")
+    created_leads_summary, updated_leads_summary = [], []
     rd_id_map, phone_map = get_existing_notion_leads()
     for stage_id, notion_situacao in RD_STAGES_MAP.items():
-        print(f"\nA analisar etapa do RD: {stage_id} (Situação no Notion: '{notion_situacao}')")
+        print(f"\nA processar etapa do RD: {stage_id} (Situação no Notion: '{notion_situacao}')")
         rd_leads_in_stage = fetch_rd_station_leads_by_stage(stage_id)
         if not rd_leads_in_stage: print("Nenhum lead encontrado nesta etapa."); continue
+        print(f"Encontrados {len(rd_leads_in_stage)} leads.")
         for lead in rd_leads_in_stage:
-            rd_lead_id, lead_name = lead["id"], lead.get("name", "Nome Desconhecido")
+            rd_lead_id = lead["id"]
+            lead_name = lead.get("name", "Nome Desconhecido")
             lead_phone = ""
             if lead.get("contacts"):
                 phones = (lead["contacts"][0].get("phones") or [{}])
                 if phones: lead_phone = phones[0].get("phone")
-            normalized_phone = re.sub(r'\D', '', str(lead_phone))
+            normalized_phone = normalize_phone_number(lead_phone)
+            
+            print(f"\n--- A processar Lead: {lead_name} (ID RD: {rd_lead_id}) ---")
+            
             page_info = rd_id_map.get(rd_lead_id)
             if not page_info and normalized_phone:
                 page_info = phone_map.get(normalized_phone)
+            
             if page_info:
-                leads_a_atualizar.append(f"- *Atualizaria:* {lead_name} (ID: {rd_lead_id})")
+                summary = update_lead_in_notion(page_info, lead, notion_situacao)
+                if summary: updated_leads_summary.append(summary)
             else:
-                leads_a_criar.append(f"- *Criaria:* {lead_name} (Telefone: {normalized_phone})")
-
-    print("\n--- A preparar o relatório da simulação ---")
-    final_report = "🤖 *Relatório de Simulação da Sincronização RD -> Notion*\n\nNenhuma alteração foi feita na base de dados. Este é um resumo do que o script *teria* feito:\n\n---\n\n"
-    if leads_a_criar:
-        final_report += "✅ *Novos Leads a Serem Criados:*\n" + "\n".join(leads_a_criar)
-    else:
-        final_report += "✅ *Nenhum lead novo para criar.*\n"
-    final_report += "\n\n---\n\n"
-    if leads_a_atualizar:
-        final_report += "🔄 *Leads Existentes a Serem Atualizados:*\n" + "\n".join(leads_a_atualizar)
-    else:
-        final_report += "🔄 *Nenhum lead existente para atualizar.*\n"
-    if leads_a_criar or leads_a_atualizar:
+                summary = create_lead_in_notion(lead, notion_situacao)
+                if summary: created_leads_summary.append(summary)
+    
+    print("\n--- A preparar o relatório final da sincronização ---")
+    final_report = "🤖 *Relatório da Sincronização RD -> Notion*\n\n"
+    if created_leads_summary:
+        final_report += "✅ *Novos Leads Adicionados ao Notion*\n\n" + "\n\n".join(created_leads_summary)
+    if updated_leads_summary:
+        if final_report: final_report += "\n\n---\n\n"
+        final_report += "🔄 *Leads Existentes que Foram Atualizados*\n\n" + "\n".join(updated_leads_summary)
+    
+    if created_leads_summary or updated_leads_summary:
         send_whatsapp_message(final_report)
     else:
-        print("Nenhuma ação de criação ou atualização teria sido executada.")
-    print("\n--- SCRIPT DE SIMULAÇÃO FINALIZADO ---")
+        final_report += "✅ Nenhuma alteração foi realizada nesta execução."
+        send_whatsapp_message(final_report)
+        print("Nenhuma alteração foi realizada. Relatório de 'sem alterações' enviado.")
+
+    print("\n--- SCRIPT DE SINCRONIZAÇÃO FINALIZADO ---")
