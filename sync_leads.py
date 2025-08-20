@@ -119,16 +119,17 @@ def get_subscriber_id(phone_number):
     """Busca o ID de um subscritor no BotConversa pelo número de telefone, usando o endpoint correto."""
     print(f"   - A procurar o ID do subscritor para o número: {phone_number}")
     
-    # Endpoint correto para buscar um subscritor pelo telefone, conforme a sua documentação
-    url = f"{BOTCONVERSA_BASE_URL}/api/v1/subscriber/?phone={phone_number}"
+    # Endpoint correto para buscar um subscritor, conforme a sua documentação
+    url = f"{BOTCONVERSA_BASE_URL}/api/v1/subscriber/"
     headers = {"API-KEY": BOTCONVERSA_API_KEY}
+    params = {"phone": phone_number} # Parâmetros de busca
     
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
         
-        # A API retorna uma lista, mesmo que encontre apenas um. Pegamos o primeiro resultado.
+        # A API retorna uma lista. Pegamos o primeiro resultado.
         if data and len(data) > 0 and data[0].get("id"):
             subscriber_id = data[0]["id"]
             print(f"   - ID do subscritor encontrado: {subscriber_id}")
@@ -151,8 +152,8 @@ def send_whatsapp_message(message):
         print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
         return
 
-    # Usando o endpoint de envio validado
-    url = f"{BOTCONVERSA_BASE_URL}/webhook/subscriber/{subscriber_id}/send_message/"
+    # Usando o endpoint de envio validado pelo seu curl
+    url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{subscriber_id}/send_message/"
     headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
     payload = {"type": "text", "value": message}
     
