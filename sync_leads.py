@@ -138,19 +138,36 @@ def backup_notion_database():
 
 # --- FUNÇÕES DE WHATSAPP ---
 def send_whatsapp_message(message):
+    """
+    Envia a mensagem para uma lista de IDs de subscritores do BotConversa.
+    """
     if not BOTCONVERSA_API_KEY or not BOTCONVERSA_SUBSCRIBER_ID:
         print("!! Aviso: API Key ou ID do Subscritor do BotConversa não configurados. Mensagem não enviada.")
         return
-    url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{BOTCONVERSA_SUBSCRIBER_ID}/send_message/"
-    headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
-    payload = {"type": "text", "value": message}
-    try:
-        print(f"   -> A enviar mensagem para o subscritor ID: {BOTCONVERSA_SUBSCRIBER_ID}")
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        print("   - Mensagem de resumo enviada com sucesso para o WhatsApp.")
-    except requests.exceptions.RequestException as e:
-        print(f"   ### ERRO ao enviar mensagem para o WhatsApp: {e}")
+
+    # Pega a string de IDs (ex: "123,456") e a transforma numa lista ["123", "456"]
+    subscriber_ids = [id.strip() for id in BOTCONVERSA_SUBSCRIBER_ID.split(',')]
+    
+    print(f"   -> A iniciar o envio de mensagens para {len(subscriber_ids)} contato(s).")
+
+    for subscriber_id in subscriber_ids:
+        if not subscriber_id:
+            continue # Pula caso haja uma vírgula extra (ex: "123,,456")
+
+        # Usando o endpoint de envio validado com o ID fixo
+        url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{subscriber_id}/send_message/"
+        headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
+        payload = {"type": "text", "value": message}
+        
+        try:
+            print(f"   -> A enviar mensagem para o subscritor ID: {subscriber_id}")
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            response.raise_for_status()
+            print(f"   - Mensagem para {subscriber_id} enviada com sucesso.")
+        except requests.exceptions.RequestException as e:
+            print(f"   ### ERRO ao enviar mensagem para o ID {subscriber_id}: {e}")
+        
+        time.sleep(1) # Pequena pausa entre os envios para não sobrecarregar a API
 
 # --- FUNÇÕES AUXILIARES E DE SINCRONIZAÇÃO ---
 def format_notion_property(value, notion_type):
