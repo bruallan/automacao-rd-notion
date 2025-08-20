@@ -22,20 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Este passo de diagnóstico pode ser removido após confirmarmos que tudo funciona
-      - name: Diagnosticar Segredos
-        run: |
-          if [ -z "${{ secrets.GDRIVE_CREDENTIALS }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo GDRIVE_CREDENTIALS está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo GDRIVE_CREDENTIALS foi encontrado."; fi
-          if [ -z "${{ secrets.GDRIVE_TOKEN_JSON }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo GDRIVE_TOKEN_JSON está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo GDRIVE_TOKEN_JSON foi encontrado."; fi
-          if [ -z "${{ secrets.BOTCONVERSA_API_KEY }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo BOTCONVERSA_API_KEY está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo BOTCONVERSA_API_KEY foi encontrado."; fi
-          if [ -z "${{ secrets.WHATSAPP_RECIPIENT_NUMBER }}" ]; then echo "ERRO DE DIAGNÓSTICO: O segredo WHATSAPP_RECIPIENT_NUMBER está VAZIO ou NÃO FOI ENCONTRADO."; else echo "SUCESSO: O segredo WHATSAPP_RECIPIENT_NUMBER foi encontrado."; fi
-
       - name: Run Python script
         env:
-          # --- BLOCO ENV CORRIGIDO ---
-          # Os nomes à esquerda do ':' são as variáveis que o script Python vai ler.
-          # Os nomes à direita, dentro de ${{...}}, são os nomes dos seus segredos no GitHub.
-          # Agora eles estão todos alinhados.
+          # --- BLOCO ENV COMPLETO E CORRIGIDO ---
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           RD_CRM_TOKEN: ${{ secrets.RD_CRM_TOKEN }}
@@ -44,5 +33,8 @@ jobs:
           GDRIVE_CREDENTIALS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
           GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }}
           BOTCONVERSA_API_KEY: ${{ secrets.BOTCONVERSA_API_KEY }}
-          WHATSAPP_RECIPIENT_NUMBER: ${{ secrets.WHATSAPP_RECIPIENT_NUMBER }}
+          # A linha abaixo foi removida porque não a estamos a usar mais
+          # WHATSAPP_RECIPIENT_NUMBER: ${{ secrets.WHATSAPP_RECIPIENT_NUMBER }}
+          # A LINHA MAIS IMPORTANTE A SER ADICIONADA:
+          BOTCONVERSA_SUBSCRIBER_ID: ${{ secrets.BOTCONVERSA_SUBSCRIBER_ID }}
         run: python sync_leads.py
