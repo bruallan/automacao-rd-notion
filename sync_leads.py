@@ -99,7 +99,8 @@ def backup_notion_database():
     header_list = sorted(list(all_headers))
     for row in temp_processed:
         processed_data.append({header: row.get(header, "") for header in header_list})
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # LINHA NOVA E CORRETA
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"backup_notion_{timestamp}.csv"
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
