@@ -116,29 +116,31 @@ def backup_notion_database():
 # --- FUNÇÕES DE WHATSAPP (REESCRITAS COM A LÓGICA VALIDADA) ---
 
 def get_subscriber_id(phone_number):
-    """Busca o ID de um subscritor no BotConversa pelo número de telefone, usando o endpoint correto."""
+    """Busca o ID de um subscritor no BotConversa pelo número de telefone, usando o endpoint da documentação."""
     print(f"   - A procurar o ID do subscritor para o número: {phone_number}")
     
     # Endpoint correto para buscar um subscritor, conforme a sua documentação
-    url = f"{BOTCONVERSA_BASE_URL}/api/v1/subscriber/"
+    url = f"{BOTCONVERSA_BASE_URL}/subscriber/get_by_phone/{phone_number}/"
     headers = {"API-KEY": BOTCONVERSA_API_KEY}
-    params = {"phone": phone_number} # Parâmetros de busca
     
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
         
-        # A API retorna uma lista. Pegamos o primeiro resultado.
-        if data and len(data) > 0 and data[0].get("id"):
-            subscriber_id = data[0]["id"]
+        if data and data.get("id"):
+            subscriber_id = data["id"]
             print(f"   - ID do subscritor encontrado: {subscriber_id}")
             return subscriber_id
         else:
             print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa.")
             return None
     except requests.exceptions.RequestException as e:
-        print(f"### ERRO ao buscar ID do subscritor no BotConversa: {e}")
+        # A API retorna 404 se não encontrar, tratamos isso como "não encontrado" em vez de um erro.
+        if e.response.status_code == 404:
+            print(f"!! Aviso: Subscritor com o número {phone_number} não encontrado no BotConversa (erro 404).")
+        else:
+            print(f"### ERRO ao buscar ID do subscritor no BotConversa: {e}")
         return None
 
 def send_whatsapp_message(message):
@@ -152,8 +154,8 @@ def send_whatsapp_message(message):
         print("   -> Envio de mensagem para o WhatsApp cancelado porque o ID do destinatário não foi encontrado.")
         return
 
-    # Usando o endpoint de envio validado pelo seu curl
-    url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{subscriber_id}/send_message/"
+    # Usando o endpoint de envio validado
+    url = f"{BOTCONVERSA_BASE_URL}/subscriber/{subscriber_id}/send_message/"
     headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
     payload = {"type": "text", "value": message}
     
@@ -164,6 +166,7 @@ def send_whatsapp_message(message):
         print("   - Mensagem de resumo enviada com sucesso para o WhatsApp.")
     except requests.exceptions.RequestException as e:
         print(f"   ### ERRO ao enviar mensagem para o WhatsApp: {e}")
+
 
 # --- FUNÇÕES DE SINCRONIZAÇÃO (RESTANTES) ---
 # (Não foram alteradas)
