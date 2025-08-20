@@ -391,7 +391,8 @@ if __name__ == "__main__":
                 summary = update_lead_in_notion(page_data, lead, notion_situacao)
                 if summary: updated_leads_summary.append(summary)
             else:
-                summary = create_lead_in_notion(lead_data, situacao)
+                # LINHA NOVA E CORRETA
+                summary = create_lead_in_notion(lead, situacao)
                 if summary: created_leads_summary.append(summary)
     
     print("\n--- A preparar o relatório final da sincronização ---")
