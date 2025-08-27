@@ -36,7 +36,7 @@ RD_STAGES_MAP = {
 NOTION_RD_MAP = {
     "67ea8afafddd15001447f639": {"notion_name": "ID (RD Station)", "notion_type": "text"},
     "67b62f4fad0a4e0014841510": {"notion_name": "De onde é?", "notion_type": "text"},
-    "689cf258cece270014dbb4bc": {"notion_name": "Aluguel", "notion_type": "number"},
+    "67b31f6fcbd9da00143b9e4e": {"notion_name": "Aluguel", "notion_type": "number"},
     "67bdbe2a5062a6001945f18b": {"notion_name": "Por que deseja a casa?", "notion_type": "text"},
     "67b31ac9fce8b4001e8dca11": {"notion_name": "Recebe Bolsa Família?", "notion_type": "select"},
     "67b0a3f6b436410018d97957": {"notion_name": "Profissão", "notion_type": "text"},
