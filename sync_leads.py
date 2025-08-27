@@ -44,7 +44,7 @@ NOTION_RD_MAP = {
     "67b321ba30fafb001c8f8743": {"notion_name": "Estado Civil", "notion_type": "text"},
     "67b5d8552b873a001c9cca66": {"notion_name": "Dependente", "notion_type": "select"},
     "67b31f37ca237d001e358c1b": {"notion_name": "+3 anos CLT", "notion_type": "select"},
-    "680cadbefcff56001b6be1a8": {"notion_name": "CPF (COOBRIGADO)", "notion_type": "text"},
+    "680cadbefcff56001b6be1a8": {"notion_name": "CPF (COMPRADOR)", "notion_type": "text"},
     "67c9dfefcbf7520014b42750": {"notion_name": "Faixa de Valor da Dívida", "notion_type": "select"},
     "689b40f4249be2001b75ca0c": {"notion_name": "Gênero", "notion_type": "select"},
     "689b4185efda16001986bcfb": {"notion_name": "Local de Trabalho", "notion_type": "text"},
