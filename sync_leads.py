@@ -1,5 +1,3 @@
-antigo
-
 # --- BIBLIOTECAS ---
 import os
 import requests
