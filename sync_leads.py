@@ -31,8 +31,20 @@ RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 
 # --- CONFIGURAÇÕES DO WHATSAPP ---
 BOTCONVERSA_API_KEY = os.environ.get("BOTCONVERSA_API_KEY", "").strip()
-BOTCONVERSA_SUBSCRIBER_ID = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip()
+
+_base  = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip()
+_extra = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID_EXTRA", "").strip()
+
+_ids = []
+for group in (_base, _extra):
+    if group:
+        _ids += [x.strip() for x in group.split(",") if x.strip()]
+
+# remove duplicados preservando a ordem
+BOTCONVERSA_SUBSCRIBER_ID = ",".join(dict.fromkeys(_ids))
+
 BOTCONVERSA_BASE_URL = "https://backend.botconversa.com.br"
+
 
 # --- CONFIGURAÇÕES DO GOOGLE DRIVE ---
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
