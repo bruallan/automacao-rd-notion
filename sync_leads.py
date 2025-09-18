@@ -12,7 +12,9 @@ from googleapiclient.http import MediaFileUpload
 
 # --- CONFIGURAÇÕES GERAIS ---
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
-NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
+NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").replace("-", "").strip()
+if len(NOTION_DATABASE_ID) != 32:
+    raise ValueError(f"NOTION_DATABASE_ID inválido: '{NOTION_DATABASE_ID}'")
 RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 
 # --- CONFIGURAÇÕES DO WHATSAPP ---
