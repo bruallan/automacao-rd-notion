@@ -1,15 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-RD Station CRM -> Notion (e alertas via BotConversa)
-Versão corrigida: 2025-09-17
-
-Melhorias:
-- Comparação correta de valores Notion (payload de envio x objeto de resposta)
-- Fallback para custom fields do RD (deal_custom_fields/custom_fields/fields)
-- Normalização de telefone em E.164 (+55DDDNÚMERO)
-- Backup do Notion com page_id e last_edited_time
-- Timeouts e retries para requests
-"""
+antigo
 
 # --- BIBLIOTECAS ---
 import os
@@ -19,7 +8,6 @@ import csv
 import datetime
 import json
 import time
-from requests.adapters import HTTPAdapter, Retry
 import google.oauth2.credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -32,16 +20,11 @@ RD_CRM_TOKEN = os.environ.get("RD_CRM_TOKEN", "").strip()
 # --- CONFIGURAÇÕES DO WHATSAPP ---
 BOTCONVERSA_API_KEY = os.environ.get("BOTCONVERSA_API_KEY", "").strip()
 
-_base  = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip()
+# aceita um EXTRA opcional e remove duplicados
+_base = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID", "").strip()
 _extra = os.environ.get("BOTCONVERSA_SUBSCRIBER_ID_EXTRA", "").strip()
-
-_ids = []
-for group in (_base, _extra):
-    if group:
-        _ids += [x.strip() for x in group.split(",") if x.strip()]
-
-# remove duplicados preservando a ordem
-BOTCONVERSA_SUBSCRIBER_ID = ",".join(dict.fromkeys(_ids))
+_ids = [x.strip() for x in (_base + ("," if _base and _extra else "") + _extra).split(",") if x.strip()]
+BOTCONVERSA_SUBSCRIBER_ID = ",".join(dict.fromkeys(_ids))  # preserva ordem, sem duplicar
 
 BOTCONVERSA_BASE_URL = "https://backend.botconversa.com.br"
 
@@ -50,22 +33,6 @@ BOTCONVERSA_BASE_URL = "https://backend.botconversa.com.br"
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
 GDRIVE_CREDENTIALS_JSON = os.environ.get("GDRIVE_CREDENTIALS_JSON", "").strip()
 GDRIVE_TOKEN_JSON = os.environ.get("GDRIVE_TOKEN_JSON", "").strip()
-
-# --- HTTP SESSION (timeouts + retries) ---
-def make_session():
-    s = requests.Session()
-    retries = Retry(
-        total=5,
-        backoff_factor=0.6,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=frozenset(['GET', 'POST', 'PATCH'])
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    s.mount("http://", adapter)
-    s.mount("https://", adapter)
-    return s
-SESSION = make_session()
-REQUEST_TIMEOUT = 15  # segundos
 
 # --- MAPEAMENTOS ---
 RD_STAGES_MAP = {
@@ -104,45 +71,34 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28",
 }
 
-# --- FUNÇÕES: GOOGLE DRIVE (backup) ---
+# --- FUNÇÕES DE BACKUP E UPLOAD ---
 def upload_to_google_drive(filename):
-    print(f"--- A iniciar upload do backup para o Google Drive: '{filename}' ---")
+    print(f"--- A iniciar o upload do backup para o Google Drive: '{filename}' ---")
     try:
         if not GDRIVE_CREDENTIALS_JSON or not GDRIVE_TOKEN_JSON:
-            print("### ERRO: Credenciais/token do Google Drive não encontrados. Verifique os Secrets. ###")
-            return
+            print("### ERRO: Credenciais ou token do Google Drive não encontrados. Verifique os GitHub Secrets. ###"); return
+        creds_info = json.loads(GDRIVE_CREDENTIALS_JSON)
         token_info = json.loads(GDRIVE_TOKEN_JSON)
-        creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
-            token_info, scopes=["https://www.googleapis.com/auth/drive"]
-        )
+        creds = google.oauth2.credentials.Credentials.from_authorized_user_info(token_info, scopes=["https://www.googleapis.com/auth/drive"])
         service = build('drive', 'v3', credentials=creds)
-        file_metadata = {'name': filename, 'parents': [GDRIVE_FOLDER_ID]} if GDRIVE_FOLDER_ID else {'name': filename}
+        file_metadata = {'name': filename, 'parents': [GDRIVE_FOLDER_ID]}
         media = MediaFileUpload(filename, mimetype='text/csv')
         file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        print(f"✔ Backup carregado para o Google Drive! ID: {file.get('id')}")
+        print(f"✔ Backup carregado com sucesso para o Google Drive! ID do ficheiro: {file.get('id')}")
     except Exception as e:
         print(f"### ERRO AO FAZER UPLOAD DO BACKUP PARA O GOOGLE DRIVE: {e} ###")
 
 def extract_backup_property_value(prop):
     prop_type = prop.get('type')
-    if not prop_type:
-        return ""
-    try:
-        if prop_type in ['title', 'rich_text']:
-            return prop[prop_type][0]['text']['content'] if prop.get(prop_type) else ""
-        elif prop_type == 'number':
-            return prop['number']
-        elif prop_type == 'select':
-            return prop['select']['name'] if prop.get('select') else ""
-        elif prop_type == 'multi_select':
-            return ", ".join([item['name'] for item in prop.get('multi_select', [])])
-        elif prop_type == 'date':
-            return prop['date']['start'] if prop.get('date') else ""
-        elif prop_type == 'phone_number':
-            return prop.get('phone_number') or ""
-    except Exception:
-        return ""
-    return ""
+    if not prop_type: return ""
+    if prop_type in ['title', 'rich_text']:
+        return prop[prop_type][0]['text']['content'] if prop.get(prop_type) and prop[prop_type] else ""
+    elif prop_type == 'number': return prop['number']
+    elif prop_type == 'select': return prop['select']['name'] if prop.get('select') else ""
+    elif prop_type == 'multi_select': return ", ".join([item['name'] for item in prop['multi_select']])
+    elif prop_type == 'date': return prop['date']['start'] if prop.get('date') else ""
+    elif prop_type == 'phone_number': return prop['phone_number']
+    return "N/A"
 
 def backup_notion_database():
     print("--- A iniciar o backup da base de dados do Notion ---")
@@ -151,39 +107,28 @@ def backup_notion_database():
     has_more, next_cursor = True, None
     while has_more:
         payload = {}
-        if next_cursor:
-            payload['start_cursor'] = next_cursor
+        if next_cursor: payload['start_cursor'] = next_cursor
         try:
-            response = SESSION.post(url, headers=NOTION_HEADERS, json=payload, timeout=REQUEST_TIMEOUT)
+            response = requests.post(url, headers=NOTION_HEADERS, json=payload)
             response.raise_for_status()
             data = response.json()
             all_pages.extend(data['results'])
-            has_more, next_cursor = data.get('has_more'), data.get('next_cursor')
-        except requests.RequestException as e:
-            print(f"### ERRO AO BUSCAR DADOS DO NOTION PARA BACKUP: {e} ###")
-            return
-
+            has_more, next_cursor = data['has_more'], data['next_cursor']
+        except requests.exceptions.RequestException as e:
+            print(f"### ERRO AO BUSCAR DADOS DO NOTION PARA BACKUP: {e} ###"); return
     if not all_pages:
-        print("A base de dados do Notion está vazia. Backup não gerado.")
-        return
-
+        print("A base de dados do Notion está vazia. Backup não gerado."); return
     processed_data, all_headers = [], set()
     temp_processed = []
     for page in all_pages:
         row = {}
-        # adições para auditoria:
-        row["__page_id"] = page.get("id", "")
-        row["__last_edited_time"] = page.get("last_edited_time", "")
-        all_headers.update(["__page_id", "__last_edited_time"])
-        for prop_name, prop_data in page.get('properties', {}).items():
+        for prop_name, prop_data in page['properties'].items():
             row[prop_name] = extract_backup_property_value(prop_data)
             all_headers.add(prop_name)
         temp_processed.append(row)
-
     header_list = sorted(list(all_headers))
     for row in temp_processed:
         processed_data.append({header: row.get(header, "") for header in header_list})
-
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"backup_notion_{timestamp}.csv"
     try:
@@ -196,12 +141,9 @@ def backup_notion_database():
     except IOError as e:
         print(f"### ERRO AO SALVAR O FICHEIRO DE BACKUP TEMPORÁRIO: {e} ###")
     finally:
-        try:
-            if os.path.exists(filename):
-                os.remove(filename)
-                print(f"Ficheiro temporário '{filename}' apagado.")
-        except Exception:
-            pass
+        if os.path.exists(filename):
+            os.remove(filename)
+            print(f"Ficheiro temporário '{filename}' apagado.")
 
 # --- FUNÇÕES DE WHATSAPP ---
 def send_whatsapp_message(message):
@@ -212,285 +154,209 @@ def send_whatsapp_message(message):
         print("!! Aviso: API Key ou ID do Subscritor do BotConversa não configurados. Mensagem não enviada.")
         return
 
-    subscriber_ids = [id.strip() for id in BOTCONVERSA_SUBSCRIBER_ID.split(',') if id.strip()]
+    # Pega a string de IDs (ex: "123,456") e a transforma numa lista ["123", "456"]
+    subscriber_ids = [id.strip() for id in BOTCONVERSA_SUBSCRIBER_ID.split(',')]
+    
     print(f"   -> A iniciar o envio de mensagens para {len(subscriber_ids)} contato(s).")
 
     for subscriber_id in subscriber_ids:
+        if not subscriber_id:
+            continue # Pula caso haja uma vírgula extra (ex: "123,,456")
+
+        # Usando o endpoint de envio validado com o ID fixo
         url = f"{BOTCONVERSA_BASE_URL}/api/v1/webhook/subscriber/{subscriber_id}/send_message/"
         headers = {"Content-Type": "application/json", "API-KEY": BOTCONVERSA_API_KEY}
         payload = {"type": "text", "value": message}
+        
         try:
-            print(f"   -> Enviando mensagem para o subscritor ID: {subscriber_id}")
-            response = SESSION.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+            print(f"   -> A enviar mensagem para o subscritor ID: {subscriber_id}")
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
             response.raise_for_status()
             print(f"   - Mensagem para {subscriber_id} enviada com sucesso.")
-        except requests.RequestException as e:
+        except requests.exceptions.RequestException as e:
             print(f"   ### ERRO ao enviar mensagem para o ID {subscriber_id}: {e}")
-        time.sleep(1)
+        
+        time.sleep(1) # Pequena pausa entre os envios para não sobrecarregar a API
 
-# --- AUXILIARES NOTION ---
+# --- FUNÇÕES AUXILIARES E DE SINCRONIZAÇÃO ---
 def format_notion_property(value, notion_type):
-    if value is None or str(value).strip() == "":
-        return None
+    if value is None or str(value).strip() == "": return None
     try:
-        if notion_type == "text":
-            return {"rich_text": [{"text": {"content": str(value)}}]}
-
+        if notion_type == "text": return {"rich_text": [{"text": {"content": str(value)}}]}
         elif notion_type == "number":
-            s = str(value).strip()
-
-            # tratar valores "vazios"
-            if s in ("", "-", "–", "—", "N/A", "n/a", "NA", "null", "None"):
-                return None
-
-            # remove moeda/espaços
-            s = s.replace("R$", "").replace(" ", "")
-
-            # normaliza separadores:
-            # se tem ponto e vírgula, assume ponto como milhar e vírgula como decimal
-            if "." in s and "," in s:
-                s = s.replace(".", "").replace(",", ".")
-            else:
-                # se só vírgula, trata como decimal
-                s = s.replace(",", ".")
-
-            # mantém apenas dígitos, ponto e sinal
-            cleaned = re.sub(r"[^\d.\-]", "", s)
-
-            # valida formato numérico (inteiro/decimal, com opcional sinal)
-            if re.fullmatch(r"-?\d+(\.\d+)?", cleaned):
-                return {"number": float(cleaned)}
-            else:
-                return None
-
-        elif notion_type == "select":
-            return {"select": {"name": str(value)}}
-
+            s_value = str(value).replace("R$", "").strip().replace(".", "").replace(",", ".")
+            cleaned_value = re.sub(r'[^\d.]', '', s_value)
+            if cleaned_value: return {"number": float(cleaned_value)}
+        elif notion_type == "select": return {"select": {"name": str(value)}}
     except (ValueError, TypeError) as e:
-        print(f"  !! Aviso: Não foi possível formatar '{value}' para '{notion_type}'. Erro: {e}")
+        print(f"  !! Aviso: Não foi possível formatar o valor '{value}' para o tipo '{notion_type}'. Erro: {e}")
         return None
-
     return None
 
 
 def _get_simple_value_from_prop(prop_object):
-    """Extrai valor simples de um objeto de PROPRIEDADE do Notion (resposta da API, contém 'type')."""
-    if not prop_object:
-        return None
+    """Função auxiliar para extrair um valor simples de um objeto de propriedade do Notion."""
+    if not prop_object: return None
     prop_type = prop_object.get('type')
-    try:
-        if prop_type in ['title', 'rich_text']:
-            prop_value = prop_object.get(prop_type)
-            return prop_value[0]['text']['content'] if prop_value else None
-        elif prop_type == 'number':
-            return prop_object.get('number')
-        elif prop_type == 'select':
-            select_obj = prop_object.get('select')
-            return select_obj.get('name') if select_obj else None
-        elif prop_type == 'multi_select':
-            items = prop_object.get('multi_select', [])
-            return ", ".join([it['name'] for it in items]) if items else None
-        elif prop_type == 'phone_number':
-            return prop_object.get('phone_number')
-    except Exception:
-        return None
+    
+    # --- CORREÇÃO DO BUG ---
+    # Adicionamos verificações para garantir que o objeto da propriedade não é nulo
+    if prop_type in ['title', 'rich_text']:
+        prop_value = prop_object.get(prop_type)
+        return prop_value[0]['text']['content'] if prop_value and len(prop_value) > 0 else None
+    elif prop_type == 'number':
+        return prop_object.get('number')
+    elif prop_type == 'select':
+        select_obj = prop_object.get('select')
+        return select_obj.get('name') if select_obj else None
+    elif prop_type == 'multi_select':
+        items = prop_object.get('multi_select', [])
+        return items[0]['name'] if items else None
+    elif prop_type == 'phone_number':
+        return prop_object.get('phone_number')
     return None
 
-def _extract_value_from_notion_payload(prop_obj):
-    """
-    Extrai valor simples de um OBJETO DE ENVIO ao Notion (não tem 'type').
-    Usado para comparação no update antes de PATCH.
-    """
-    if not isinstance(prop_obj, dict):
-        return ""
-    try:
-        if "title" in prop_obj:
-            arr = prop_obj["title"]
-            return arr[0]["text"]["content"] if arr else ""
-        if "rich_text" in prop_obj:
-            arr = prop_obj["rich_text"]
-            return arr[0]["text"]["content"] if arr else ""
-        if "select" in prop_obj:
-            sel = prop_obj["select"]
-            return (sel or {}).get("name", "")
-        if "multi_select" in prop_obj:
-            return ", ".join([it["name"] for it in (prop_obj["multi_select"] or [])])
-        if "number" in prop_obj:
-            return str(prop_obj["number"])
-        if "phone_number" in prop_obj:
-            return prop_obj.get("phone_number") or ""
-    except Exception:
-        return ""
-    return ""
-
-# --- TELEFONE (E.164) ---
-def normalize_phone_e164_br(phone_str):
-    """
-    Normaliza para +55DDDNÚMERO (preserva nono dígito).
-    Aceita entradas com 55/00/+, espaços, etc.
-    """
-    if not phone_str:
-        return ""
-    digits = re.sub(r"\D", "", str(phone_str))
-    # remove prefixos comuns
-    if digits.startswith("00"):
-        digits = digits[2:]
-    # já começa com 55?
-    if digits.startswith("55"):
-        core = digits[2:]
-    else:
-        core = digits
-    # tenta garantir 10/11 dígitos
-    if len(core) in (10, 11):
-        return "+55" + core
-    # fallback: se já veio completo com 55 + 10/11
-    if len(digits) in (12, 13) and digits.startswith("55"):
-        return "+" + digits
-    # último caso: prefixa +55
-    return "+55" + core
-
-# --- RD: custom fields fallback ---
-def _get_deal_custom_fields_dict(deal):
-    """
-    Gera dict {custom_field_id: value} tentando várias chaves possíveis.
-    """
-    if not isinstance(deal, dict):
-        return {}
-    # candidatos de chaves
-    for key in ("deal_custom_fields", "custom_fields", "fields"):
-        lst = deal.get(key)
-        if isinstance(lst, list) and lst:
-            out = {}
-            for it in lst:
-                try:
-                    cf = it.get("custom_field") or {}
-                    cf_id = cf.get("_id") or cf.get("id") or cf.get("uuid")
-                    val = it.get("value")
-                    if cf_id:
-                        out[cf_id] = val
-                except Exception:
-                    continue
-            if out:
-                return out
-    return {}
-
-# --- BUILD de propriedades para o Notion ---
 def build_properties_payload(lead_data, situacao):
-    """Constrói o dicionário de propriedades para a API do Notion, apenas com valores presentes."""
+    """Constrói o dicionário de propriedades para a API do Notion."""
     properties = {}
     properties["Nome (Completar)"] = {"title": [{"text": {"content": lead_data.get("name", "Negociação sem nome")}}]}
-    properties["ID (RD Station)"] = {"rich_text": [{"text": {"content": lead_data.get("id", "")}}]}
+    properties["ID (RD Station)"] = {"rich_text": [{"text": {"content": lead_data["id"]}}]}
     properties["Status"] = {"multi_select": [{"name": situacao}]}
-
-    # telefone
     lead_phone = ""
-    try:
-        if lead_data.get("contacts"):
-            phones = (lead_data["contacts"][0].get("phones") or [{}])
-            if phones:
-                lead_phone = phones[0].get("phone")
-    except Exception:
-        pass
-    properties["Telefone"] = {"phone_number": normalize_phone_e164_br(lead_phone) if lead_phone else None}
-
-    # custom fields
-    custom_fields_dict = _get_deal_custom_fields_dict(lead_data)
-
+    if lead_data.get("contacts"):
+        phones = (lead_data["contacts"][0].get("phones") or [{}])
+        if phones: lead_phone = phones[0].get("phone")
+    properties["Telefone"] = {"phone_number": normalize_phone_number(lead_phone) if lead_phone else None}
+    
+    custom_fields_dict = {field["custom_field"]["_id"]: field["value"] for field in lead_data.get("deal_custom_fields", [])}
+    
     for rd_id, notion_info in NOTION_RD_MAP.items():
         rd_value = custom_fields_dict.get(rd_id)
-        # NÃO sobrescreve com vazio
+        
+        # --- NOVA REGRA: NÃO SUBSTITUIR COM VAZIO ---
+        # Só processamos o valor do RD se ele não for vazio.
         if rd_value is not None and str(rd_value).strip() != "":
-            if notion_info["notion_name"] == "ID (RD Station)":
-                continue
+            if notion_info["notion_name"] == "ID (RD Station)": continue
             formatted_property = format_notion_property(rd_value, notion_info["notion_type"])
             if formatted_property:
                 properties[notion_info["notion_name"]] = formatted_property
-
+                
     return properties
 
-# --- Busca leads existentes no Notion (maps por RD_ID e Telefone) ---
 def get_existing_notion_leads():
-    """Busca páginas e mapeia por RD ID e por Telefone (E.164)."""
+    """ATUALIZADO: Busca leads e armazena todas as suas propriedades para comparação futura."""
     print("A buscar leads existentes no Notion para mapeamento...")
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     rd_id_map, phone_map = {}, {}
     has_more, next_cursor = True, None
-
+    
     while has_more:
         payload = {}
-        if next_cursor:
-            payload['start_cursor'] = next_cursor
-        try:
-            response = SESSION.post(url, headers=NOTION_HEADERS, json=payload, timeout=REQUEST_TIMEOUT)
-            if response.status_code != 200:
-                print(f"### ERRO ao buscar leads do Notion: {response.text}")
-                return {}, {}
-            data = response.json()
-        except requests.RequestException as e:
-            print(f"### ERRO de rede Notion: {e}")
-            return {}, {}
-
-        for page in data.get("results", []):
-            props = page.get("properties", {})
+        if next_cursor: payload['start_cursor'] = next_cursor
+        response = requests.post(url, headers=NOTION_HEADERS, json=payload)
+        if response.status_code != 200:
+            print(f"### ERRO ao buscar leads do Notion: {response.text}"); return {}, {}
+        data = response.json()
+        
+        for page in data["results"]:
+            props = page["properties"]
+            
             # Mapeia por ID do RD
             rd_id_prop = props.get("ID (RD Station)")
             rd_id = _get_simple_value_from_prop(rd_id_prop)
-            if rd_id:
-                rd_id_map[rd_id] = page  # guarda página completa
+            if rd_id: rd_id_map[rd_id] = page # Armazena o objeto da página inteira
 
             # Mapeia por Telefone
             phone_prop = props.get("Telefone")
-            raw_phone = _get_simple_value_from_prop(phone_prop)
-            norm_phone = normalize_phone_e164_br(raw_phone)
-            if norm_phone:
-                phone_map[norm_phone] = page  # guarda página completa
-
-        has_more, next_cursor = data.get('has_more'), data.get('next_cursor')
-
+            phone = normalize_phone_number(_get_simple_value_from_prop(phone_prop))
+            if phone: phone_map[phone] = page # Armazena o objeto da página inteira
+                
+        has_more, next_cursor = data['has_more'], data['next_cursor']
+        
     print(f"Encontrados {len(rd_id_map)} leads com ID do RD e {len(phone_map)} leads com telefone no Notion.")
     return rd_id_map, phone_map
 
-# --- RD CRM: busca deals por etapa (v1) ---
 def fetch_rd_station_leads_by_stage(stage_id):
     url = f"https://crm.rdstation.com/api/v1/deals?token={RD_CRM_TOKEN}&deal_stage_id={stage_id}"
     try:
-        response = SESSION.get(url, timeout=REQUEST_TIMEOUT)
+        response = requests.get(url)
         response.raise_for_status()
         return response.json().get("deals", [])
-    except requests.RequestException as e:
-        print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}")
-        return []
+    except requests.exceptions.RequestException as e:
+        print(f"Erro ao buscar negociações da etapa {stage_id} no RD Station: {e}"); return []
 
-# --- UPDATE/CREATE Notion ---
+def normalize_phone_number(phone_str):
+    """
+    Normaliza o número de telefone para o padrão DDD + 8 dígitos,
+    tratando DDD com '0', código de país e o 9º dígito.
+    """
+    if not phone_str:
+        return ""
+    
+    # 1. Remove todos os caracteres não numéricos
+    only_digits = re.sub(r'\D', '', str(phone_str))
+    
+    # 2. Remove o '0' de operadora no início, se houver
+    if only_digits.startswith('0'):
+        only_digits = only_digits[1:]
+    
+    # 3. Remove o código de país '55', se houver, e o número for de celular/fixo com DDD
+    if only_digits.startswith('55') and len(only_digits) > 9:
+        only_digits = only_digits[2:]
+    
+    # 4. Trata o nono dígito para padronizar em 8 dígitos + DDD
+    # Se o número tiver 11 dígitos (DDD + 9º dígito + Número)
+    if len(only_digits) == 11:
+        ddd = only_digits[:2]
+        numero = only_digits[2:]
+        # Se for um celular (começa com 9), removemos o 9º dígito
+        if numero.startswith('9'):
+            return ddd + numero[1:]
+    
+    # Se o número tiver 10 dígitos (DDD + 8 dígitos), já está no formato padronizado
+    if len(only_digits) == 10:
+        return only_digits
+        
+    # Para outros formatos (ex: números curtos), retorna o que for possível
+    return only_digits
+
 def update_lead_in_notion(notion_page_data, lead_data, situacao):
-    """Compara campos e envia somente diffs. Evita sobrescrever com vazio."""
+    """Compara campos e detalha as alterações no alerta do WhatsApp."""
     lead_name = lead_data.get("name", "Nome Desconhecido")
     notion_page_id = notion_page_data["id"]
     print(f"  -> A ATUALIZAR lead no Notion: '{lead_name}'")
-
+    
     url = f"https://api.notion.com/v1/pages/{notion_page_id}"
-
+    
+    # Constrói o payload apenas com os campos que têm valor no RD Station
     new_properties_payload = build_properties_payload(lead_data, situacao)
-    old_properties = notion_page_data.get("properties", {})
-
-    # diffs (comparar com extrator de PAYLOAD)
+    old_properties = notion_page_data["properties"]
+    
+    # --- LÓGICA DE NOTIFICAÇÃO CORRIGIDA ---
+    # Compara apenas os campos que realmente estão a ser enviados
     changes_list = []
     for prop_name, new_prop_obj in new_properties_payload.items():
-        if prop_name == "Status":
-            continue  # tratamos status separado
+        if prop_name == "Status": continue
+        
         old_prop_obj = old_properties.get(prop_name)
         old_value = _get_simple_value_from_prop(old_prop_obj)
-        new_value = _extract_value_from_notion_payload(new_prop_obj)
+        new_value = _get_simple_value_from_prop(new_prop_obj)
+
+        # Compara os valores e adiciona à lista de alterações se forem diferentes
         if str(old_value) != str(new_value):
             changes_list.append(f"- *{prop_name}:* de '{old_value or 'vazio'}' para '{new_value}'")
 
-    # status (não sobrescreve se houver divergência local intencional)
+    # Lógica de exceção para o Status
     current_status = _get_simple_value_from_prop(old_properties.get("Status"))
     status_divergence = current_status and current_status != situacao
+
+    # Se houver divergência de status, envia um alerta específico
     if status_divergence:
-        print(f"  !! Aviso: Status no Notion ('{current_status}') ≠ esperado ('{situacao}'). Não será alterado.")
+        print(f"  !! Aviso: Status no Notion ('{current_status}') é diferente do esperado ('{situacao}'). O Status não será alterado.")
+        # Remove o Status do payload para não o sobrescrever
         if "Status" in new_properties_payload:
             del new_properties_payload["Status"]
+        
         alert_message = (
             f"⚠️ *Alerta de Sincronização*\n\n"
             f"O lead *{lead_name}* teve uma divergência de status.\n\n"
@@ -500,26 +366,28 @@ def update_lead_in_notion(notion_page_data, lead_data, situacao):
         if changes_list:
             alert_message += "\n*Outras Alterações Realizadas:*\n" + "\n".join(changes_list)
         send_whatsapp_message(alert_message)
-
-    # Decide se atualiza
+    
+    # Determina se há de facto algo para atualizar
     payload_sem_status = {k: v for k, v in new_properties_payload.items() if k != "Status"}
     deve_atualizar_status = not status_divergence and current_status != situacao
-    deve_atualizar_outros = bool(changes_list)
-
-    if deve_atualizar_status or deve_atualizar_outros:
-        payload_final = new_properties_payload if deve_atualizar_status else payload_sem_status
-        try:
-            response = SESSION.patch(url, headers=NOTION_HEADERS, json={"properties": payload_final}, timeout=REQUEST_TIMEOUT)
-            if response.status_code == 200:
-                return f"- Lead atualizado: *{lead_name}*\n  ({len(changes_list)} campos alterados)"
-            else:
-                print(f"  ### ERRO ao atualizar lead no Notion: {response.status_code} {response.text}")
-                return None
-        except requests.RequestException as e:
-            print(f"  ### ERRO de rede ao atualizar Notion: {e}")
-            return None
+    
+    # Envia a atualização para o Notion apenas se houver alguma alteração real a ser feita
+    if changes_list or deve_atualizar_status:
+        # Se não houver divergência, o Status normal faz parte do payload
+        if deve_atualizar_status:
+            payload_final = new_properties_payload
+        else: # Se houver divergência, usamos o payload sem o Status
+            payload_final = payload_sem_status
+            
+        payload = {"properties": payload_final}
+        response = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+        
+        if response.status_code == 200:
+            return f"- Lead atualizado: *{lead_name}*\n  ({len(changes_list)} campos alterados)"
+        else:
+            print(f"  ### ERRO ao atualizar lead no Notion: {response.text}"); return None
     else:
-        print("  -> Nenhuma alteração detectada para este lead.")
+        print("  -> Nenhuma alteração detetada para este lead.")
         return None
 
 def create_lead_in_notion(lead_data, situacao):
@@ -528,74 +396,58 @@ def create_lead_in_notion(lead_data, situacao):
     url = "https://api.notion.com/v1/pages"
     properties_payload = build_properties_payload(lead_data, situacao)
     payload = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties_payload}
-    try:
-        response = SESSION.post(url, headers=NOTION_HEADERS, json=payload, timeout=REQUEST_TIMEOUT)
-        if response.status_code == 200:
-            lead_phone = properties_payload.get("Telefone", {}).get("phone_number", "N/A")
-            return (f"*Lead Adicionado*\n- *Nome:* {lead_name}\n- *Telefone:* {lead_phone}\n- *Status:* {situacao}")
-        else:
-            print(f"  ### ERRO ao criar lead no Notion: {response.status_code} {response.text}")
-            return None
-    except requests.RequestException as e:
-        print(f"  ### ERRO de rede ao criar lead no Notion: {e}")
+    response = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    if response.status_code == 200:
+        lead_phone = properties_payload.get("Telefone", {}).get("phone_number", "N/A")
+        return (f"*Lead Adicionado*\n- *Nome:* {lead_name}\n- *Telefone:* {lead_phone}\n- *Status:* {situacao}")
+    else:
+        print(f"  ### ERRO ao criar lead no Notion: {response.text}")
         return None
 
-# --- FLUXO PRINCIPAL (MODO DE PRODUÇÃO / BATCH) ---
+# --- FLUXO PRINCIPAL (MODO DE PRODUÇÃO) ---
 if __name__ == "__main__":
-    # Opcional: descomente para rodar backup antes de qualquer alteração
-    # backup_notion_database()
+    
+    # backup_notion_database() # Descomente para ativar o backup
 
     print("\n--- A INICIAR SINCRONIZAÇÃO RD -> NOTION (MODO DE PRODUÇÃO) ---")
     created_leads_summary, updated_leads_summary = [], []
     rd_id_map, phone_map = get_existing_notion_leads()
-
     for stage_id, notion_situacao in RD_STAGES_MAP.items():
         print(f"\nA processar etapa do RD: {stage_id} (Situação no Notion: '{notion_situacao}')")
         rd_leads_in_stage = fetch_rd_station_leads_by_stage(stage_id)
-        if not rd_leads_in_stage:
-            print("Nenhum lead encontrado nesta etapa.")
-            continue
-
+        if not rd_leads_in_stage: print("Nenhum lead encontrado nesta etapa."); continue
         print(f"Encontrados {len(rd_leads_in_stage)} leads.")
         for lead in rd_leads_in_stage:
-            rd_lead_id = lead.get("id")
+            rd_lead_id = lead["id"]
             lead_name = lead.get("name", "Nome Desconhecido")
-
-            # telefone
             lead_phone = ""
-            try:
-                if lead.get("contacts"):
-                    phones = (lead["contacts"][0].get("phones") or [{}])
-                    if phones:
-                        lead_phone = phones[0].get("phone")
-            except Exception:
-                pass
-            normalized_phone = normalize_phone_e164_br(lead_phone)
-
+            if lead.get("contacts"):
+                phones = (lead["contacts"][0].get("phones") or [{}])
+                if phones: lead_phone = phones[0].get("phone")
+            normalized_phone = normalize_phone_number(lead_phone)
+            
             print(f"\n--- A processar Lead: {lead_name} (ID RD: {rd_lead_id}) ---")
-
+            
             page_data = rd_id_map.get(rd_lead_id)
             if not page_data and normalized_phone:
                 page_data = phone_map.get(normalized_phone)
-
+            
             if page_data:
                 summary = update_lead_in_notion(page_data, lead, notion_situacao)
-                if summary:
-                    updated_leads_summary.append(summary)
+                if summary: updated_leads_summary.append(summary)
             else:
+                # LINHA NOVA E CORRETA
                 summary = create_lead_in_notion(lead, notion_situacao)
-                if summary:
-                    created_leads_summary.append(summary)
-
+                if summary: created_leads_summary.append(summary)
+    
     print("\n--- A preparar o relatório final da sincronização ---")
     final_report = "🤖 *Relatório da Sincronização RD -> Notion*\n\n"
     if created_leads_summary:
         final_report += "✅ *Novos Leads Adicionados ao Notion*\n\n" + "\n\n".join(created_leads_summary)
     if updated_leads_summary:
-        if final_report != "🤖 *Relatório da Sincronização RD -> Notion*\n\n":
-            final_report += "\n\n---\n\n"
+        if final_report != "🤖 *Relatório da Sincronização RD -> Notion*\n\n": final_report += "\n\n---\n\n"
         final_report += "🔄 *Leads Existentes que Foram Atualizados*\n\n" + "\n".join(updated_leads_summary)
-
+    
     if created_leads_summary or updated_leads_summary:
         send_whatsapp_message(final_report)
     else:
