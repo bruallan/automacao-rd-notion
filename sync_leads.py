@@ -223,18 +223,43 @@ def format_notion_property(value, notion_type):
     try:
         if notion_type == "text":
             return {"rich_text": [{"text": {"content": str(value)}}]}
+
         elif notion_type == "number":
-            # aceita R$ e vírgulas
-            s_value = str(value).replace("R$", "").strip().replace(".", "").replace(",", ".")
-            cleaned_value = re.sub(r'[^\d.\-]', '', s_value)
-            if cleaned_value:
-                return {"number": float(cleaned_value)}
+            s = str(value).strip()
+
+            # tratar valores "vazios"
+            if s in ("", "-", "–", "—", "N/A", "n/a", "NA", "null", "None"):
+                return None
+
+            # remove moeda/espaços
+            s = s.replace("R$", "").replace(" ", "")
+
+            # normaliza separadores:
+            # se tem ponto e vírgula, assume ponto como milhar e vírgula como decimal
+            if "." in s and "," in s:
+                s = s.replace(".", "").replace(",", ".")
+            else:
+                # se só vírgula, trata como decimal
+                s = s.replace(",", ".")
+
+            # mantém apenas dígitos, ponto e sinal
+            cleaned = re.sub(r"[^\d.\-]", "", s)
+
+            # valida formato numérico (inteiro/decimal, com opcional sinal)
+            if re.fullmatch(r"-?\d+(\.\d+)?", cleaned):
+                return {"number": float(cleaned)}
+            else:
+                return None
+
         elif notion_type == "select":
             return {"select": {"name": str(value)}}
+
     except (ValueError, TypeError) as e:
         print(f"  !! Aviso: Não foi possível formatar '{value}' para '{notion_type}'. Erro: {e}")
         return None
+
     return None
+
 
 def _get_simple_value_from_prop(prop_object):
     """Extrai valor simples de um objeto de PROPRIEDADE do Notion (resposta da API, contém 'type')."""
